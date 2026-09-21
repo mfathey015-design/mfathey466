@@ -1,7 +1,5 @@
-Flask==2.3.3
-python-telegram-bot==20.6
-psutil==5.9.6
-requests==2.31.0
-aiohttp==3.9.1
-pyTelegramBotAPI==4.15.3
-telethon==1.34.0
+python-telegram-bot==20.7
+Flask==3.0.2
+httpx==0.26.0
+waitress==3.0.0
+

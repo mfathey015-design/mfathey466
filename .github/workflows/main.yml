@@ -59,7 +59,7 @@ jobs:
           while true; do
             echo "🚀 Starting bot at $(date)"
             
-            # تشغيل البوت (معدل ليعمل مع mom.py) في الخلفية مع مراقبته
+            # تشغيل البوت (mom.py) في الخلفية مع مراقبته
             python mom.py &
             BOT_PID=$!
             

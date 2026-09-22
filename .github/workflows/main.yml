@@ -2,131 +2,125 @@ name: Hosting Bot 24/7 - Ultra Stable
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master, رئيسي ]
   schedule:
-    - cron: '*/5 * * * *'  # كل 5 دقائق بدلاً من 15
+    - cron: '*/15 * * * *'   # كل 15 دقيقة (الحد الأدنى الموثوق في GitHub)
   workflow_dispatch:
-  # تشغيل تلقائي عند بدء التشغيل
   repository_dispatch:
     types: [keep-alive]
 
 concurrency:
   group: bot-running
-  cancel-in-progress: false  # عدم إلغاء التشغيل الحالي
+  cancel-in-progress: false
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions: write  # للسماح بإعادة تشغيل الـ workflow
+      actions: write
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'  # تسريع التثبيت
+          cache: 'pip'
 
-      - name: Install Dependencies
+      - name: 🔍 Debug - Show Files & Branch
+        run: |
+          echo "📍 Branch : ${{ github.ref }}"
+          echo "📍 Commit : ${{ github.sha }}"
+          echo "📂 PWD    : $(pwd)"
+          echo "----- Root files -----"
+          ls -la
+          echo "----- Searching for main.py -----"
+          find . -name "main.py" -not -path "./.git/*" || echo "❌ main.py NOT FOUND"
+          echo "----- Python version -----"
+          python --version
+
+      - name: 📦 Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install --no-cache-dir flask python-telegram-bot psutil requests aiohttp pyTelegramBotAPI telethon
-          if [ -f requirements.txt ]; then 
+          if [ -f requirements.txt ]; then
             pip install --no-cache-dir -r requirements.txt
           fi
 
-      - name: Kill Old Processes
-        run: |
-          # قتل أي عمليات قديمة للبوت
-          pkill -f "python.*main.py" || true
-          pkill -f "flask" || true
-          sleep 2
-
-      - name: Run Bot with Auto-Restart
+      - name: 🚀 Run Bot with Auto-Restart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PORT: 8080
-          PYTHONUNBUFFERED: 1  # لمنع تأخير السجلات
+          PYTHONUNBUFFERED: 1
         run: |
-          # تشغيل البوت مع إعادة تشغيل تلقائي عند أي خطأ
+          # تأكد أن الملف موجود قبل التشغيل
+          if [ ! -f main.py ]; then
+            echo "❌ main.py غير موجود! توقف."
+            exit 1
+          fi
+
           while true; do
             echo "🚀 Starting bot at $(date)"
-            
-            # تشغيل البوت في الخلفية مع مراقبته
             python main.py &
             BOT_PID=$!
-            
-            # مراقبة البوت
+
             COUNTER=0
             while kill -0 $BOT_PID 2>/dev/null; do
               sleep 10
               COUNTER=$((COUNTER + 1))
-              
-              # إرسال إشارة استمرارية كل 5 دقائق
               if [ $((COUNTER % 30)) -eq 0 ]; then
-                echo "💓 Bot is alive - $COUNTER/30 cycles"
+                echo "💓 Bot is alive - $COUNTER cycles"
               fi
             done
-            
-            echo "⚠️ Bot stopped at $(date) with exit code: $?"
+
+            wait $BOT_PID
+            EXIT_CODE=$?
+            echo "⚠️ Bot stopped at $(date) with exit code: $EXIT_CODE"
             echo "🔄 Restarting in 5 seconds..."
             sleep 5
           done
 
-      - name: Auto-Sync Data with Retry
+      - name: 💾 Auto-Sync Data
         if: always()
         run: |
-          # محاولة المزامنة مع إعادة المحاولة
           for i in {1..5}; do
             echo "🔄 Sync attempt $i/5"
-            
             git config --global user.name "GitHub Action"
             git config --global user.email "action@github.com"
-            
-            # تحديث الملفات
             mkdir -p hosted_projects
-            
-            # إضافة الملفات مع تجاهل بعض المجلدات
             git add hosted_projects/ || true
-            
-            # محاولة الـ commit
-            if git commit -m "Auto-sync $(date +'%Y-%m-%d %H:%M:%S')" || git commit -m "Auto-sync"; then
-              echo "✅ Commit successful"
-              # محاولة الـ push مع إعادة المحاولة
-              if git push origin main; then
-                echo "✅ Push successful"
-                break
-              else
-                echo "⚠️ Push failed, retrying..."
-                sleep 3
-                # محاولة سحب التغييرات أولاً
-                git pull --rebase origin main || true
-              fi
-            else
+
+            if git diff --cached --quiet; then
               echo "ℹ️ No changes to commit"
               break
             fi
-            
+
+            git commit -m "Auto-sync $(date +'%Y-%m-%d %H:%M:%S')" || true
+
+            if git push origin HEAD:${GITHUB_REF_NAME}; then
+              echo "✅ Push successful"
+              break
+            else
+              echo "⚠️ Push failed, retrying..."
+              sleep 3
+              git pull --rebase origin ${GITHUB_REF_NAME} || true
+            fi
             sleep 2
           done
 
-      - name: Keep-Alive Trigger
+      - name: 🔄 Keep-Alive Signal
         if: always()
-        run: |
-          # إرسال إشارة استمرارية لإبقاء الـ workflow نشطاً
-          echo "🔄 Keep-alive signal sent at $(date)"
+        run: echo "🔄 Keep-alive at $(date)"
 
-      - name: Cleanup
+      - name: 🧹 Cleanup
         if: always()
         run: |
-          # تنظيف الملفات المؤقتة
           rm -rf /tmp/*.lock || true
           rm -rf /tmp/*.pid || true
           echo "🧹 Cleanup completed"

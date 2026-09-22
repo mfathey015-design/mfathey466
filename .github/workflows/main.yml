@@ -4,9 +4,8 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: '*/5 * * * *'  # كل 5 دقائق بدلاً من 15
+    - cron: '*/5 * * * *'  # كل 5 دقائق
   workflow_dispatch:
-  # تشغيل تلقائي عند بدء التشغيل
   repository_dispatch:
     types: [keep-alive]
 
@@ -45,22 +44,23 @@ jobs:
       - name: Kill Old Processes
         run: |
           # قتل أي عمليات قديمة للبوت
-          pkill -f "python.*main.py" || true
+          pkill -f "python.*mom.py" || true
           pkill -f "flask" || true
           sleep 2
 
       - name: Run Bot with Auto-Restart
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           PORT: 8080
           PYTHONUNBUFFERED: 1  # لمنع تأخير السجلات
         run: |
-          # تشغيل البوت مع إعادة تشغيل تلقائي عند أي خطأ
+          # تشغيل البوت مع إعادة تشغيل تلقائي إجباري عند أي خطأ
           while true; do
             echo "🚀 Starting bot at $(date)"
             
-            # تشغيل البوت في الخلفية مع مراقبته
-            python main.py &
+            # تشغيل البوت (معدل ليعمل مع mom.py) في الخلفية مع مراقبته
+            python mom.py &
             BOT_PID=$!
             
             # مراقبة البوت
@@ -76,8 +76,8 @@ jobs:
             done
             
             echo "⚠️ Bot stopped at $(date) with exit code: $?"
-            echo "🔄 Restarting in 5 seconds..."
-            sleep 5
+            echo "🔄 Restarting immediately in 3 seconds..."
+            sleep 3
           done
 
       - name: Auto-Sync Data with Retry
@@ -106,7 +106,6 @@ jobs:
               else
                 echo "⚠️ Push failed, retrying..."
                 sleep 3
-                # محاولة سحب التغييرات أولاً
                 git pull --rebase origin main || true
               fi
             else
@@ -120,13 +119,12 @@ jobs:
       - name: Keep-Alive Trigger
         if: always()
         run: |
-          # إرسال إشارة استمرارية لإبقاء الـ workflow نشطاً
           echo "🔄 Keep-alive signal sent at $(date)"
 
       - name: Cleanup
         if: always()
         run: |
-          # تنظيف الملفات المؤقتة
           rm -rf /tmp/*.lock || true
           rm -rf /tmp/*.pid || true
           echo "🧹 Cleanup completed"
+

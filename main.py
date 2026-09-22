@@ -1,12 +1,737 @@
+import os
+import zipfile
+import subprocess
+import sys
+import shutil
+import asyncio
+import logging
+import time
+import signal
+import platform
+import threading
+import queue
+import requests
+from threading import Thread
+from flask import Flask, jsonify
+from telegram import ReplyKeyboardMarkup, KeyboardButton, Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# 🔐 Protected by ELMASRY VIP V8
-import zlib,base64,binascii
+# --- [ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ] ---
+TOKEN = os.environ.get('BOT_TOKEN', '8627312006:AAHudxdlRmkfU81eRzIH69WLCFzoLn6FSoU')
+
+ADMIN_IDS = [
+    int(os.environ.get('ADMIN_ID_1', '5608455904')),
+    int(os.environ.get('ADMIN_ID_2', '5608455904')),
+    int(os.environ.get('ADMIN_ID_3', '0')),
+    int(os.environ.get('ADMIN_ID_4', '0')),
+    int(os.environ.get('ADMIN_ID_5', '0')),
+    int(os.environ.get('OWNER_ID', '0')),
+]
+ADMIN_IDS = [aid for aid in ADMIN_IDS if aid != 0]
+
+PRIMARY_ADMIN_ID = ADMIN_IDS[0] if ADMIN_IDS else 5608455904
+ADMIN_USERNAME = "@mfathey466"
+ADMIN_DISPLAY_NAME = "💞 @mfathey466 💞"
+
+# GitHub Configuration
+GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN', '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')
+GITHUB_USER = "mfathey015-design"
+REPO_NAME = "mom"
+
+BASE_DIR = os.path.join(os.getcwd(), "hosted_projects")
+TEMP_DIR = os.path.join(os.getcwd(), "temp_uploads")
+PORT = int(os.environ.get('PORT', 8080))
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+# --- [ɢʟᴏʙᴀʟ ᴅᴀᴛᴀ] ---
+running_processes = {}
+bot_locked = False
+auto_restart_mode = False
+user_upload_state = {}
+project_owners = {}
+recovery_enabled = True
+live_logs_enabled = True
+user_log_sessions = {}
+monitor_tasks = set()
+
+# --- [PSUTIL CHECK] ---
 try:
-    _k = binascii.unhexlify("74676a67686a6a7968")
-    _d = base64.b85decode("F;Q1pY+6K5Y-mJJdS^sWY*Iv8ZB|rGd23Woc~MkOGG}^OGiPc}Y+6)WYgSZEG;35%X>4j)Xj(*1cVlW<dRatIXhv;WYfe;8HCa?oYiw#wY(_F!Giy{?GetyNGgU-dGiPd9Gg(wmXlQy_cu`bYcu_}MX<9N(Gf{d@F<EL_Yg#f{ZDd4EdQC)5Yh-F!YFcVdY))!UdRa$WdR0_TFlR(fdQELjGD$K{ZD>?kYHU<ZFhy-mcvWpqcS%%FX;NxUXlz7HYC=?6G(|*CYeH06X<BMpHDh{CGD&JqYf5TPZBkcRXj*DoGG}^CY*Knzcw<yfYFbxXXhM2TZBkcGXk<iAdQELkHBCfKGg(JYHCabbdR13VdO<{5XiijFF;Q(<dS_})YfeN?GF56?Y*uYrYF0!~cSU+xG(kj8cWYElG(}WRHAON_c~xy$G)Zbsd08?|X-;iTZ9-I9Yg%eqFjZ|$HAON_ZBA5KHD^RxY)WcQHAQV%dPPK9YED;8HCb(0F-ccVZCY1PG+9(nG*w4hY-ChVYes5XYED#IFjaa^Gev4zdPPK9X-Y>=YgT$$Yiw#-X-aBYcWY`|cUeSQY-~hNXk=7PcxQS}Y*JTQHAz=aF=td-YECj)cu8$eFiBKSG-p&!dPzr5cTGf1X-;}hZBj=~Fi})ZGD%lXY)(f_GfhNIFhw#>X+lI#F;Q(zGg)m;Y+5o-YC>vSXj*zrcuj3tcSS@`Xi`*KcS%=TGEG-cX;Ly-XhM2TYDR5YctL7TY*JTFF-=5TdO<`^XjWHFGf6U8Yf>^<Xj(^2XjU>=dTUf#cS%HAX-;iTc}+4|Xi`L4G-ql~X>3GJG(|E^dO>PgGf7lVXij=gHC1X^cTGo6ZB}hfGeK%vctL7TFj+ELY+5o|c};pvdP!GKF;y~6cu8$dGh=#LFiCn%cu7=Qc}Z7VcV|>jYED;8GF3!QZBj=~GErAgY)*PjX<B+tXj)WRX>3$YHBnSecU44AGf_lOY-nm)F+oIHXl!a)ZAL^|X-Y><cSS^6dQ~z`cU4DDF<C@SG(}WSF-1pOYDz~>dRcl+ZDd4RdTUfqdQmc2c}-MLG)-+;Y)&#wFiCArX;Mc`FjZ7eHAymAYiN2-Y*Iv8YgTPqYf@@iGC_JxGD$>QX-aBNGDSyPc}X%^Y(i8`HA!t+ctJ!@YffrTX-;igctuoBY*tiRFjYiOHAzHTGF5s`c~xyrG-qmAcu`kRF<DnnGgU`gcUeSDcUf0WZB|rSYC=?6X>3GIGeuWUYfeW^X--E^YFaW*ZAw&4XlQy(Yh-FpGh<XwHC0DiYiw#+GetyCGg(wwXi|Dvcu{RyXj(*CY(hj@HBnbuZBlAlF;!GqGF4PfZBlJnF+qAwdP!GVXhLdQF=J|3cUeSFXij=fYgR-~G*v`SFik{Hd0AIkF;QwwGDSpAcu6u@HAQ+&c~w+RZDe{)Y*JKNGGls8Fhy-nGg)m;GeuWTcWXpWYHUPKY)V90cu7}HGiQ2EYED#5ZBAEBGD%liGC@R6YgTPqcv(kJXi73oYerX1cTq=8dQELjYFc_ucTH4IF-dA#Xhv5~Gh;+rZAw&GF;Q(<GeLS;HAO^PdPP)EY({NOG*N9?GF4PgX<9^Dc|k-@G)Y8HF=td+ZAL^*X--#KHD^RmZAMpGG;2g!Fj+@WX+|<mY({Nad1q8vcxzNnF-=rYZDdqVGi!QTYF0!|GiOvyGEqcNGHYsCXht$kG-p&<cxyyWYeGa$ZBkcSX-aKbG*MSiF>6Fmc}aRsF-dw(GgU-QX;y7cYGhPTdQC@8ctL7ecvWpqYf48=HAzHIXj*DocST1{c}aRscu7=QY+6@YYDO|mG)Xc}YECj)F+o&KdPzr5ZANNZHDgp-ZAyAscTF-`Y)V8=Y)Ud&YF1QQXk=7bcV|>jZER{<cu`kQcSTfMcSUMhG(~z@c}Z7KXlO)EYDQ{JZDeX%GEr(ycujg)XjU>=G)+`aY+8C*YD!mGc|m$jG)-+;Gg)d`cUgK)dPPJ{cv)0Vctu1{ZANWcdP!7GYFboUF;PcOY+6T8G)Y8HG)Y8GXk>a>GEr(yYg%erYf?u}HAON_F;y~6c~xyqF<DnydPP@HFj;C^Yeq6nc}Z7UdRbRlGf`?zc~NamG-E_gZBkcSZ9-H|dQoalZBA`kHDg3tdRa$Lctu1{ZAMgDcxP%(GD&(_Y+6K5dPOo#ctuxEYfeO3Fi~wyGErAecS(9pF=JFtZBBYkXlz7Jd23WnG+9(xGf_lZYg$B2Y)WlfdP!7IdQnGOcS$l?Y))-XZAMp3H9<s9cu`kbdQn$eYF1ZHXi`T_Xhv5}cu8$pdO=iKYf?l`GEG!YF-ccic~MkOHBB;3cTH+ed1HE6F=J|4GDTNUFiCA$cu6u&F=JF(GGkOuG+9JVcu`bYG(~DoGEr1oHBoI@YDR5NZAw>8GeuNdXiis7F+o&MXi8UFZCYwhGC@R5YG_1FGDTEccU4zSX;N)XFjX>5cTHDLYFb2EYiLwiYiLwXG-GN_XhuX&Xi9BPdPy=)F=s?tY-~hMZAMgDc~w+RdO<`^G)Y%kFhxXKG(|*OcSUMhXih{=YF0;0G+9JiHEU{GcUf&(X<A24dQn$ectuoNcWYEyF;!GeZD>?ZX-aKQdRbIWF;!GqG)-zvGDU4oYD!m5ZBj%}cuhx6ZBjB>G)-4dYEpVmc|})GX<A24YfeN?cu8taGFe1VdQDeZYg$)MG-rBQY*Iv8G*v`ecV~J{cv)9jG)a0*F;!|>G(|^RYEEiRG)-4ccxOaSG)a0{X-YCpG)ZkuX-Y&+XhLdQYiLwWGF5F&dQC@KX;xQFFilrkF;!GqFjZ7pZDeXrH9=HQZB}|&Y(_**H9=}wdQn78dS`lBYDPp_Y)Vv5dPP@Gc~M7BFl$6kX+|<lY))!fX-Zd5G;4ZIHCabmHD_v0F->h+Yiw#-Fil5KYEF7iX;v~$HEU{4cR^HIGg(AWFlTB_d1pjUYF2GdF-<aAHAz%YcUeSFZB9p8X;Ly-GiPdAd24!3Xhv;Kd0A~)Fik{HX;N2NZD>SIcUgK)cxOaUX-ZU0X<BMpctuA~ZB9o`ZBkTEctL7SG*x;{cTrbacttWzGgVYhcu`kRYf3~-ctLtiX+lI#GHX;#GG|0iYiLATHC04fY-mJJcv)>)HBB;EX--5>F;z!SXjW=kZB}hfGG}^CXj)fIYFbxWXiij3Fj+@WHBnbhcUfvqX<BVgcSTfLXlztjFj;L{Xk=7QGeJa7cx!4+c}+x4X>3$ZYiLATcS%%QX;N)XdR0_TFhP1*Fj+E9Y*JTGFjZGiGg)d)Z9-I8GF5s_G)Y%kGev4ycST1|GFfU)YF08?G+BCCGG|mzY({!cdO=iLdQELvY)(W^GF5F_GD%lWc~w+RGDSpBctuxDYEo)VYgTGmFhP1*Fi}KWG;35(G)YHKcUf&tYEnl}ZB|E4Yf4v5GF4PrdR0_UYiMd&X+~;JGEr(;Gfiz-ctu27F-=5Id24D;ZCX@XGetyNcSUVkGg)m}ZDd4EdO><lGg((zF-<aAZ9+s^Y+6T6Gh=#Lc~MkNcU44AZ9-~JZD>SIGEr(;ZAL^|c}Yi3cS%Q1Xij=rcxP%^ZDe{)FhzP!cv(bEHEU{4HDg3hY))-XHDh{BFhxgCYfeW`HBEX=dPzi1FiA2^Fj;L{GEr?!Yiv|cYFcVdc|~nnZDdqWYEDE?XhKv^cVlW<Fil5JX+|<lYF0!}F-dw^cw=f=dR2N&Xhu{{Xj(*0cTrbaXi8LBG(}fhdQDVWdQoaxc}Yi4G+9?qFj+E9GFe1UFiliWXi{ogF;#6^ZBA5LFimPsc~LS>Fik{FHC0qjc|mGUc}+x5X-Y&+c|})RcST1}c~wVGHEU{3GF388Xi|DkYiLAGY*I&0G*MSsYGhPRYg%nuctvVjYg#f{c|~nbGG|0hFik{GdR13iF;Oy2GD&(_ZD>?kGfizxcw=f=Y(`g2GD%licWYElcu7}HYEErVGF56$Yf5cdX-YC#YF1QPYgTPdYDzL$G;35%F;PTMHCbv-F-2ERXi_pwZAN-oX-Y>=GEqcNF<C@fc~L}8Gf7lgX<9^DGEr(xdTV-3c~MkNcu_}AcUf&tY({EMHDhX8ZCXT6X<A2GFiliWX+}p)Xj*MrYHUPKcuiDIFl%Z}FiA&Fcu8$qc~MkaXi{xWFiA2^GG}^DcvVDNXhv6AYED#7Yg$xJcTs9uX--61GEsV2G+Av~ZANWPF<CNBdR1ypYg$K7Xi{oUGFeAYY)WleGF4YjGEr?=Xi|DvF-dJscTH4HHCb&<cuhoFY+6@ZHDg3idQDeZc~wVGG)-4pc}+)7c|}B8GGkOvcxP%_Y(_^<dR0VCGh=#9cWYElGfhNIGDU4pcw=f=YFcehX--#KG-ql~YfgGjc~xyqZAwQ@GG}T{dS_}`GGjzeXlztYGgW#`G;2goHAz=aZ9+s&cWYEncUgK_ZERFecUf&&YD!m5Yg#f{G*LuNc|}J}c}Z7JGf`JfXjVi`Yeq*+cSS^6dPPK9F;PTKG*N9%Xi92XXj(^FY+6)JYGis@ctuA}GGls8YC>vFdP!|gYf?m7Gg&fDYfds*dQntOY(i97GF4PsG*L%QX+|<mZEQqZFlTB_Giy{&c}+)JFhNvKXijZTFk@;>Fhw$1HBDDqYDzLqFiBKSY*tiGcV|RTG)Xc|ZDdqhGf_uPdO>PhYEm*yc~LS>HBnSgFl$szd0A~vHCa?oHBEX>dQo~#Y+6T7X;LyyXhv#TX-0ZkZBkcHY;0;yX>4jvGDSpMXjW8DHAQ+^FlR(sF;Oy3HDgpxGiPdAYFaW`c~yE&cu6u%dQ~z_YG_nVYEDO5ZAw>KHAz%YY(i98YFcegG+8oDY)UdtXi`K@cUebGYD#)pGfh`cXi9BaF->Y(dPQwnYF27aGgU`TYFboIcTq=8Y-DOqdQDeaHAPoXHDgpwFj+)RYfeW_Yf48>cx!4+cTH4THC1g*Gg)d`Gg*2~FiA&GYFbxXYesEOY({NPdRbRZF-dA!Z9;lZdQDeZYh-#^G+Av<HBm%OY*u<rcu`kbYD!d2X<AoJcTsvyY*sQ&cu{RxG(|^Rcu`kRG+BCCGev4zF-bB_cu_}9XhKv^GD%lYZCXTHXhv;KX-aKcX;xQGdPQnYdO=i8X>58~cS(9qF=uL7X-;}sGfh`odShx?dO=iAdTUf!YEDE>ZERFcGF3!RGeLSycuhxIGf`AdHCabmFik{HYDz>+F-<Z~GDSyDGiy{@X-axdctu1{cv)&qF+o&XXi`^NGiz#EcTGo6FhzP<F;Q1fdPzi1YgR{2YerOBXi7v)X--5=ZDdqVdR1yoYeH&GHAzQWGG}^DG-pIkY))-XX<B+tG(~z&Yf4vIG+8oEYg#f+Y(i98F;!|>YfeN>Fj-VjYED;LYFaW*X;Md8YiLATd0Bc+cUdw`X;wr}FjZGsG-Fgwc}YiFXlPVVY*uPbcuj3uGD&SsdQC@7ZB8;yX<9N_c|~nmHC0DWcv*T`HAz=mX+~F1cV~K8GF3-fGD%cfZANNZGEGNXGD$~TGiQ2PY))5AHAQ+^GD%cgFi}TMG*LuPXhu|7FjZ7eGf`?;Gfh`bZ9-~VdP!GJZDdqUYG_nVGG|m;Y)X1rcw=f=ZCWx-YHUPLd1FLPFjZ7eG;35^G)*#2dPRC!XlPVgdPOo>Gevq$FiliXHBD+xYiLAIY)WccX;OMwGi!QIY-DO#d0A>&G(~DoG)YuhFhNvVdRbRlF;!|=YFbxXG*MSgXjW}mYGis@X;OMlc|}A|cTGo6G+9SaHBDDqX;wr{Fi|pDZBAECF;y~7FlTyMGiO9vX-aBNcTH4UGg(wlXj)fIc~MtcXj(^4Xk<iMG-E_sHDg3tFhx{OY*KAmYF0!~Xk=<yGet5@G-G;AXi`*Jcw<yqZD?v)FjX>6GeuWUcTsvxZD@K;dTT^YY-mJIYeq6nGevDpY-m(ZFk?hoYgR-~Gg&fCGD&JqcxO~idTV-3cU4qbdQntbGEqcNGEsV2ZCY1ad1FLRc}+)JYF2t#dR1y#Gg(JkXj(E&Y(_*{ZBlAkYivYXGHXOmdP!|fG+Am{ctKQ7dP!7SYGis%Y)WleX-YCpYF27ZY;06dG;3;3X+~;IGg)d`cu{&ycu{IiX;wr{dPQwcZCY(kFj+EAc}+)8F-=EKcU3Y?cvVDAXl!~}cu8$eZD@K~X=rL$Yfe{BcTH4JF=JF&cw<COZB9f_F-2ESYGhPSF;#6^F-ccVF-=!lFj+)TYECj)dPOo$cTqA~Xi`K?d1FLRYC=?5H9<s8Y*s{0ctuxDYfeO3cS%%FG(kj9cSU+xX;y7cFj+E9F<EL^Xhug(YEo@kFiBKSGg(JkZAMp3cu8tbdPP@RYerOBGDTERZBlAZG)YHJX+~5{Y+6KGYiLwjcSS@^Yiw#wZAxldG;4ZJX+~;IF-b>SYf^emG(~M$Xi|DjGgVhkctJ!?Yf3UrdQECtHCb0$c~xy$Y({EYXhv#HGF3-ScU4zeGEr1cH9=HPFj-Vhcv)9jY(hj&Fjaa@Xj(^4HCa?yY-~hYZBAECY-B`DG*N9@Fj+)TYgTGaFj+)RZBA5LGevq?F>7jBcx!4-d0A~vHAOO6X<9^0cTsIwX;Mc{GiQ2DGgUH8GeJa8F-25Pc|~nbX+l&@Gh=E_GEFj0G-Fg*GD%lWY*JKCd0A>%HCa?oZB}hfFi~n+FlTyMcv)9XF-2-lFikQ|c|lZJYGhPeG*MJeZAL^+Xht$wGeuWUX+~{LGg((!F=Iqpd1HD`dQoakFil5IdP!GVcv)0hGiy{?X-+atcTsv-d22*XcUf&sZALOpc~L}KcU5XmG*x;{c}X%&FiBKScTIX(HAPoiG(l=wcV~K8F-1g8YG_1HF-=rWdPzi1ZB|!JY-ChTYECj)ZBlAYX+mmFGgU-RG*v`eG(}fhcTrSXG)*#2cu8tnG*xX*Y)WlfHAzHTGfhNVHA!t+GEG-bXhu|7X-aBNFi|p1FimP&cVlWzcSS@_G-FgvcS&kaF-2ESYh+YSYF0!~Gi!QTYFbxMYerX3Gg)d)dRbRZY({!nY)Ud&Y*t5FY*sQ&Fil5VXi{xjGh=F5YiLwYZEQqMcuj3udQojoc~wVFGEr(-YeITicu`bNYgR{EHAPoWGgUH9YivYXXi73oZAM2;Fi}@cY*tiSdQnGOHBD_zXjXbnYg$xJX;y7cXi`^NF<E*|X<BMoX-YCqG+9(nGEHhucS&toZESi@Xii5@F-dw&Y)V8<HEUE^cuho3Gg(wlF;RL>XlztXXjWHGdTV-3cSUVZF-1gAX;xHOd1HD`Xi|DjYgSiJXlztXHAzQLFj;L*dPzr5dQo~#dQoaxX<BMpYfe{9Y(`gFX+~5|G(}WTYDPy*Xi`^AZANNMG+Am+YEnc_cvWgzGf^^5dQo~#G;3;FGD$>FXhuX@GeJa6YD!d2Y(`g2XjW=jH9<sLX;ykpFj+)TcxzNnZ9+s%Y+5o+ZBjB>G)YHKG+9(xYHVswcR^HIcU4qcc}YZ1FhOcsGG}T|X+}g(dQDVWcWZi1G)-z+F;PTLYf@KDc|k-?YEF7tYf?u~cSToDXjVi|Y({!bGg(wwGFfd+ZD>SVcTGf1Xi8UEY+6)VdRbRbG);P0G)a0{dSg^tYEo@lFi}TNFl%~QF<D1VYDQF9Y(_FoF;z!RGf_uRctuxDYff!WZCWx;cUfv#GDT`lX<AoWXlztYGf{0>GFewyHD_u~GeLS;H9>k#dRa$WY)({8XhuX$HBnbiGh=E_F;y~6HBmBIXlz7Ic}Yi2HC1X&F+qA+Y;06cX-;ZQX;xQRHBD4bdR0VEYD#KNXlPVTFhx{aXj*DbGiO9iYC=R#Gf_uQXlQC$cUdw`GDT`ldPPS~X-Y?0G(~z%Gf^^5YEo2BY-~hNd24D~X=rL%HCb&=dP!<cYHUPLYeG~_F<EU|dQCD-Gg((pcUe?gF=tdxGf_lOG-p&zXhM2fGgWO(GgVhwGG}U9Z9+s^Y-oB;F-=rXc|})GY;06oHCcLDYf5cScu7}JYf?l_ZD>?YZBj=~cSSNyXj(^3GDTEPcTrSNd1q=(dPzrGYD!d3ZBBYwYf4mFYfe{9cS%=HF-0;>YFcVpX+}g(Y({EXZB9o{HDgpyXjVsBYF0!|d1q8wc|}J}YEDN^Yg$)XZBj>CFj+ELc~xy$ZCX@KZAw&4c|})EdO=i8G-qmAFj+@WHBm=RFi~n*GDSyCZAL^+F>88FdPP@RcWZi0cWYEyYEoBDGDTNUYEo)WXjW8OXhu|8GDTNfcuiMLF;P@aYEo29GC@R7XhLdDY))!UXhv#TdQmc2GFfd}HC0DWX=GGQYG_niZBA-VH9>k!YC=R#GEr1dHA!t*d09kSX;LyyX+lI=GEqcMZB|5DF-25PY*t54GG}^DdQoaxG*xO^Fj;C%ZD>?kYeGa#YiLwiYFcVdcU4zUdO<`_HCcL2X-ZU2F-cTSF-1gLcug`*YEo)hcxyyXG+Am*c~LS>X--#Jc~w+RY*tiHFlTyBY*trIG;4ZIc~w+dHCa?mGg(JYYED;LXi92LcV|RSHBD4nG+9?!Xj(*0ctuoAFlR(sGeJ~ZHD`KFFhzPzY(`gEYiv|aG*Nm^X--sGG)Zb&cu`kbG)-zvX+mmFZEQqZdQEywc|}A|Yg%eqGiy{$Xhv#UY*s{0Y*JKOX<9^1Xl!~-YFcetZB}YoG*vQAGfh`ccUebIXlztkdRbIiZB{Z)Yf?u|Fj-elY*tiGX;MT_cug`+cUf0Xc|}xCZERFdHBnSfX+~;UY+6@NX+~{XX;w#1Gf78UXk=7bdR0VCY*u<rF=s?hFi~n+Yff!Vcuho4Fj;L`Yiv|cYEDE?YfeW^FiAvOZAvmtcv)&rZDdqhXijZSdTUf!XjWHQcxP%^F-bB`cTH+pFi}@pY-mJIYgT$rYF27mFhOcgX=p@EF-=!lXiisJX+}g^XjW8OcSU+mXk<iAGfiq*Y*s{0c|}K0dS`l0Y*uYeY*K1YdQDeZX+}g&HC1X&GEr?!d0A>&FhxX8cui_rYDQO0F->h+YECj)F-=rWFjZ7fY(_FpYg$K7cu{IvG*x<8Fik{GHC1X&dP!<pG*x<8ZBkcGcV}u^X;M^9Y(`X1Fik{GFhxX8FhP1vHBCoPYDz>}d0A~uZANNNX-;igYg$xIF;P@aG(|F5ZAN-oGFenwY({EMFl$6lXj(^4Y(_**dP!GLctuA~XjW8NY*t54cUgK_YgR-~HBEX>cw=f>HAzHHY*KnzHA!ksGgWF$G)-4oYf@KEHCb(0F-dw(G*N0=Xj(*CcvV+UdQojzX>4juF=JFsY*I&BG*LuaYeq6oGEHh)GEGEHFk?hoY*JTQGf_lMcui_qG-qmBctuoNFjZ7dG)+fZGf{d?G(|^GXhLdEHAz%Xctv_nG*Nm^Z9+s(cuhx5dRa$KFlR(hGC_JxHBEX=X=G|ydQnGDd0AIkdTUfpdQmb?c~vq_cU4qbHDg3hY)X1fGF5s`X<AoKYg$xUFjZ7qGiOv;Gf{d@X;ykpGgUH9Fj-VuHAPfSYeqy)cu8tndO><wcui_rHDg3iXlz7Hc~w+TF-cTfY*KnzXhM2fHC04TcS%=IYf4v7YD#)dGFewoF+oIHZALOpZBj&9Y(_^<GFenlYfgGuG+Am+HD^>>Yh*-EcxzNyY*KnnGgUH9YiMd(c};3rZB|rGFhNvKXi`U7Y(_*{Gf6~EHCb0#Y*JKCZAMg0cv)9XG)YuicS&kacU5XyHAPffHB~ZBX;N2NdO<`^GDU4#HBEX>G)-4eY({!bdRa1AZBjB>cvVzQYEErUGf{d?Fj0D0ZAxuUZB|51c}+4-FhxX9X-;iUY)WcQcu8$edPQnld0A9hd0A>scWZiCHDgpxGh=E^GEGEJYD#)ddPQnlYFboUX-Y&*Xij=gGF4YjF-=!ZG)Y8GdSiM{G)+`aFiBTgcU4DEG*vQ9GEG-nF-1g8Fk?hcXiis6Xi7v)dP#a&Xk=7cG-GN`GEr?!FiA&FYeq6ndQnGDcv)>uGD%cVY-B`FF-dAoYEoBEGf8?)YgTPdHBEX>Yeq*}dSg^sFlSUvFiliVc~M7BZAxlQGD&J#HB~ZMc~LT1YfeN?YerXDdRb~sY+6T6Y)VvGYeITicS&kaZDdqUX--5<G*xX`YF0!}ZD>SVX-ZUCHAPffF-dw&GFewnZB9g5Yg$B3cxOaUHETpqcUe?gdR0_TdS^sWYF0!|Fi})lYDQFAHAPoiX;OMlYDQOCXjWHQHEUE&GEp*FG(|*DHETppF+plhX-Y><dPzi1Gfh-ZZD?vuY;0;yGeJa7YfeN@cv)&$YEoBOcST29cu7}TG+9?!ZERFpY+8CvHCabbGEqlbHBnbjY+7nfctKQJc~w_hF->YsX-;iTY-B`Dc~NayFilrYZAMp4HBDDfcSTfBGEG-mdTVM<HAQM!Y-D;)d1F*sFi})mY*JTQcw<yfY*trJG+9(nX;MT_F=td-X;N)YYes5XdPOo#d24D}ZB|E5cu_}9cTH_hX>3GIHC0quFlR(gYgSZQG;35(c~Nazcv(kJXi7v{YeH&HXi`*9Xih{=Gf{0#Y+5o|cTGo5G*MSiX<A23F-dw&HBnSqc~wVEGFfU_Xi7&-Y-mJIY*JKCG)Y8SG);O=cV}u%GD%ljYDO|nYeq*+Y*JKDcTH_tdS^sUYeq6nZB}hfc~LS>HD^RkYerX3YEo@kdPQwbX--sHF;y~IG*LuNGf6~RGfiqud09kGYFaW`dPQnYXjW=Xc}Y}SFi})ZY+8C*YF27lZDeX%Xi9obFikQ|cu`kRG*v`SGh;+rXhK9zXhKw3cSSNyYD!m5dR0_ed1q=_YC>vSX+~;JY)({KZAwH>GevDqctv_nc}X%^Fhx{PG(|*DFjYiNY-m(ZYgR-~XijZeF<E*|Fl%~EdPP@HGf7ukYEnc_dR0eFcu`kRdR2N(G)Y8SXi92YHAPohd24D;HD`KRGf`JhHBDDpc~wMOGiz#2FiAvOG(l=wF-b&DX=r**Gf_ucF-<aActuoNHA!t+HBD4nF-=EKY)V&7Fi}KLcTIXuY*JTGG(|E^XhK9zYF1QFG)-4eXi`^BG-pIkF<CNMcTq%6Xj)fJGFe1TYg%nic}Yi3Yf5@eX=FrBdQELvdQCD-G(}WRG+9(yX;x}kcu_}McxP%(Y-nmtdRb~(Z9-H{F+o&LF<DekH9=HPc|}xCX+~;JdTVM~cWY`{Xhug*GEGNXdPzr5cSToDd1q=)G-ql}G)ZkvG*v`eXi`L4HBDDqF-1pOGF5s_HDh{BGeuNcGFf^~Fj+)RXk=7QGHXOyX;Mc|c~NamF-cTeFilrYXjWHRHAQ+(HAQModPOo>c}Z7JctuA~F-dJsZAw>7X<AoVHDhW`HBDDedQn7AXiis6Gf6~EXk=<yGFe1VZB|!JYEErVXj)fVXi7v*HAz=ldQn$ddQC@9GGls9Y)V&JHBm%bG*L25G(l8Pcu`bZFk@6&HAQ+&X<BMpcWYExX=G|nX-;ZRGfh-ZYDz>+GEr1dX<BMpG)Y8SX;Ly-YgR-}cWY`*Yfe{MY*uYfFhOcsZCZLwdQCD}GD&S&c~w+eHAz=mYiMdsZBjB#F-cchXj)WGGDTNSX-Y?0X-ZU1Y*s{0dQDVXdPP)PYh-FpY))5NYFbxMYFcVdX<9N(ZAw&5c~xyrXi{xWdSg^iF>7i~c}Z<ec}Z$cY*s{CYC=>_ZAL^*X-aKbG*LuaFj+E9cU5g!Yh-F!Xi`T_X;NxVY*trJcUeSDFik{FcTsIxGC_Jyd0A9iZAN-oZCWx-c}+4+Y;06cXjW=kYf5@qXi73!dS_Hld09kHGGkOuGfh`nXlztkd0Bc{HCa?ndQo~=YerX2X;N)XG*v`SFi~w<Y-~hYcVkpeHBmB7GEGNLdQDVLZBA5Lcv(kJZD>?kX--61F->|-GeuNcY-m(YYh*-EX;y7oYD!m6YeH&Tc}-VOGf8?)Gf6U8Gf6~EGF3!PXk=<lYf4v6cTsIxY(`W~d1Go>G)Zk)F;!GfHD`KFZD?vvYf@KEG;3;Fc~NamG)a0+HB~ZBY*uPoHCaSXX;xHCZDdqgZDe{`cvVMDYDPy-cR^}Sc~MtcHC04SF-dJ%XlO)DHA!k(X;ykoGi!QIYff!iY)(g7G-p&<Y;06ocTGo4XjVs0ZB|5Dcv(bEG)YHKYf^1aYgRH%Yf5cSc}aRrXijZTHAPohcU3Y@Xj(*1YfeN>cuiDJcx!4+YEo)hFlTB_c~NRkXi73oGgWF@Yf48?G*xX{Xj)WSGG|m-Fim<*X<A24c~LS=F-cTeY*Iu{GHX;>d0Bc*ZD?v)Y)V&7YD!dDF-=5HYeH&HFhNvJcSUVYY(_FpHA!twYf@BBF;z!eXi7v)cU5g#YfeN>F-3Y=YF1ZIXlQC#cS%G~Yf4vHdPzrGGg)d*YD!d3Yf>^!HA!ksX;Mc{ZBjB#Y*KnzGEr?=cU4qPFj+@WYEDE=dQECgYg#f+ZBlAZF;PTXG(}fUXi|DjG)-+;dR1*sG-FgxXhv#IYHVs*GfhNVc};CjYFbxXH9=HPGf6~EG;3;Fc~wVGcw<ygGg*2~X;wr}YDQFAHBm%PZ9-~Vd0A~uF;!PhFi}KJcttWzGFdWBF;QwwGEHq+dO<`_Y)X1fZCX@MZEQqZd0A>&dQC)4GEGEUGD$>QYg$B3cTq%7Y*trKGDR|3G)-+<cu8tmFhxgAFk?hbXi7&<cxQS|cVk3acu7Z1YEo)icvV+fdPzi1F-dJ%ZCY(jcTGo6Y(_*{F+o&XF-25QZBA5Lcu7=GZB{Z(cUe?fX<BMcdSiM`HBD4bZ9-I8Y)(f{dO<`@Xi9oncU5XmX+|<xGf_lOG*L%QGEqcNHCbv-FjZ7pGDSyEYfe{9Y(_^~cvVDCcSSNyZCXc9YHUPLZAwH<cS%=HZB|!LcU449HC0zxF=Kj8G;35%cu{&;G*v`TGG|m-FhNvKdS`k~c~MtSYixQ=X-;iUcWYEldPQnZcv*T*dR2N^HBnSqZAw&4Y)(W?HDg3iXi7v*H9<sAdRatGctuoAcv)0VHAPoiX;MT_YixQ>ctKQ6ZESj3YFb22Fk@6rX+~;JY)WlSFimP&X<AoLYesEaF-=rXGfizxdRbRlZB9o`Xi92MXk=<mGg&fDGfhWYGiO9iFjX>5G*xO&FjZ7dFjZ<<cUe?Ucu`bOZB|E5YEErgdR2N(dR13XdPPT0YF27lFj;L)dQn7AdP!7TG*wqlY-D;_HAz=ZYD!d1Y)&#+HAPoiGHZHHY*Iv8GgWO(YEo29GfhWNFhzP!GDTNUYDPy*G*MJdcvV+TGEp*4X-ZdFGfjF~X;v~$F-=rYFlSU+F<C@UG)-z*GGls9HCa?mcSTfAGF56?FhNvWGDSyDX-axoZCYwsF=JFuYDR5ZHBov_X+~5{G(|*Ocu8tbF=tdwYF1ZIG+9(yF<E*}YD#TRX>3GKd0Bc+ZANWQdQCD;c|mGTX+~68GiPc}GfhNKdP!7TXl!~}FlTyBGG|mzX+}g^FhOcrXlztYGeLS;ZB9o|ctu1`cU4zfcv(bRdTT^aYf5cSZAwR4dS^sWYDz~>F+plhGgVhlGevD#Gg&fOYgTPqZB{Z_cU4DEYes5XXi{ogGf8SrX+~{XXj(E^Fi~wyYeH07GEGEUGEp*4X-;iUGF5s`c~xy$ZD?vvGgU-RHC1g|c~MtScTq%7cuho2GD$L7XjWHRYGis@Xi`^NGeJ~McvUh@HC1X(X=qehZAL^-XjVr~HEUE)G-p&=cTs9hcUf0iZCXc9Yf5@ecu8$qcR^HIYf^1aGEHhtHBD_!cSTfBF;PcNG*LuaYh+YUHCcL1HCa?ncv*T`HBCfKcuj3hFk^a6cvVMDX+lI#YECjvG*Nm^Gevq?cTrSNHCbv-Giz#2Y)V8;cw<ygYg%nhcVl{4Y-B`QdO<{5ZBjB>ZDeX%G)ZkvH9=}xG)*#DcU5g#HAPohFj0C=Y-mJHY*uYqYFb22FlR(fYHWH=F-3Y#YfeW^cu_K0HEU{4cvVMEcvVzcdQ~!6XijQcGG|0ucv)0VX-;ZdX<A23HDgpxcvVDNY+6)LX=FrBXjW8OXj(*1cUgK)YiMdtdPP@RF-dw(cTGf2Fj+)SctuoNFhy-mXl!~}HC04SYg%eqcV|ReGf_lNXi8U3G(}WRY)Ud&cUeSEY;06nGD&S&GC@>NG)-zvYf?l{F-<aAGeJa8Xi_pwctuoCYGhPRctuxQdRbIYHBEY1c~wMOdTUfoY*KAnctvViYDQ{JX+~E~GiOvzcVlW!G)-+;Y+6@NXih{<G*N0!G-FgwYf@BAd24D-Xi9BOcVk3adP!|fZEQqNGDSpAcw<ygGgU-RG*xX{X=rLqYECjvHAO^Dc~MkOXi8U4F<CNAY(hj@GHXOyF-1pOcV~J|dS^sVctveZdR13hYDz>-FilraXlz7HdQntQGeuWTYh*-PctLtuX-ZU2dPQnkGDUh#c|mGgcSUMiGeJ~ZYeITiZERFdZAL^-c~w_Ud09tJGG}^OGet5^G(l8OcV}u&Xi73odPRCpZB}|tcu_}9ZAw&GcUf&tGiz#DX=qegFk^aIF<C@Td1FLQY+7wvX+}p+X+~F1G)Y%ZG(}fVFj-ViZBA-VdR13hY*JTGHDgpyFiAvOX-YCqYF27aX-;igHBm%PGEqlOcu7P}c~xpzZAN-dYf?u|cvWpqZDdqgc~xpoG(}fhGf`JgX;NxhXii5?F<C@SX-axcF;RL>cS$l?c}Z$cctL7eGevDpdPziDX-ZUDY)Vv4XjW=kZB{Z)Yfe{BG)-z+d24D}HB~ZBGgU`VY-~hYYiw#+X+~5{cw<CQHAz=bdO>PUYF1ZIYDQE~dPy=_c~w_UZB8;xY+6@NFj-ViZBkcFYDPp)G*xX`Y(i8|dO=iAcu7}Tcu_=8HEUE)F>7i~Y({EXGf`ApG*Nm^X;xHOX;Mc`HAQVsY+7nrcu6u%GDT`xXhuX@FjYrQZAMp4GFeAXcvVzRcUebHF<DnnZB}YoY*t53Xij=gYEoBCF-b>Fc}Yi3cxO~iGF3-TGf`?yFhx{NXhug(c|lZKZDeXqc|}KBYHWI0G*L%QGD$~IG-rBQG)-z*Y-m(XcVkpqdTVN0c~MkacS%G|XjVi`F;y~7c~w+ScST29HBCoaFiA&Rd1FLPGF3-UZALOqF=uL8d24!2GEr1bYf@KFGHZHGF-dA!cSTfMc|lZ9Y*trIFiliXGD$~IGHZHHY;1Z?X<BMdG)+WLGGkO(Fj;L{F-1pCZBA`jX+lIzZBlAZc~xp!HC1X(GD%cUYDQ{KG)-zwYFbxKYesraF=s?hGiOv<YesraGDTNSd0A~vG(|F5dR0VDcujguc~w_UGDSyCHD`KRGC@R6Fk@;?G+9JVYFcescTrSNGF4YiY*s{0GD$K{Fik{FcTrSLGg(wwZB9f^Yf>^<F=J{@G-G;AX=p@RYEo)VXhK9<XijQQG-pIkG-p&!cTH4Jcv)&qZAN-oHAz=mX>4j)GDR{@YF1QQX;wr}cV~K8X>3$aFikR9cR@s2ZBA58dPP@GZCY(jXl!~-G)-zvXlQCqYeITXF-=5Id23W!Fi~n+YDz>-c}Z<fdQ~!6cWZi1Gf8b(YGg!OGF56$d0Bc*XhwQjZCY1PY)({KXi{oUYF0#Actv_yF=u*NZCWx-c};3rFiBTWdRcl|X-aKcYfe;JFhx{OcWZiCG*L2HXlO)FYGg!BFiA&RcuiDUHD`KRG*x;{GeJ~ZY(hj$F;#6^HAzHGHA!twZDeX%dQntPFim<{Y*Iu|F=s?tZAMpFcTsIkYD!d3HBmB6dRa$LX+~68Xi73oXjW8CYF0;DYeGa#YDz~=G)-4oHDh{Cc}Y}SdPRCpY*t53YFbxXZAL^+F;!|>cu7Q0GC@R7cw<CPGEGNXX--E@ZD>?YGHYs1Y)(f_dPQwbGEsU?Y)&#xZB8;yX>58<cWY`{X;v~#Gf^^4Gf8?)Y*JTRdQntbX<B+tGiO9vFjZ<=G(}WSXi`^MGEG-mGDSpMd09kGX;xHOGF4PsdQmc2YF1QFZB}|sZAw>7YFcegZBkcFY(_^-Yfe;Icu7P}FlSUvF<D1VFhx{ZdO><wcxO~jG-FgxG*MJfFhzP<cu{IvGGls9ctuxQdR1*%G)-+zG(mb<cWY`*F-cTfYGhPedQnGOYHU<aHD_v0F>6#=HAO^PHCZxQYD!01ZD?v)Gf`JrZBA5KGiOv;d1pjUZAvm(HEU{3Gf7ukGErArFiCAqGf6T{XhM2fGEqlOGf`AectuoNG;2g!HDhW{Gfh-lcxO~vZDdqUYFboJXj*DnHBnSeF-1pDGg(wkcSUVZcuiDIF;!GrX>4juZERFoXht$wdPRCocTs9iY-~hNcu9I$Y)Vv5X;v~$c}Z<eF-2`zdQmc2Y*K1kF-2ERGD%cTG)+fNcu8$eG)Zk*GfhNKF->hvZB{Z)dO>PUYGi6ncvVzSF->hvYEm*;Gg(wxcSTf9Gg)m}F;!PuYEErgFhOcfGev4yd0A~*dTVM~Gi!QIX-YCqHCZxEc|m$vZAMg1X<9N(Yg$xJX+}g^YFc_tX=rL$Yf>^<cR^HHXjW=kX;xQRYgSiUF+o&MXhv5~ZCY1ZXjW8CdR1*sZBAECGgVYtX;wr}cw<CPcTH+qcS&kZZB}YoYEo@YcUe?Vd1Go#Y)(W^c|}xNY*JTFH9=HQYf5@eHBD_<YC=?5dQntQHETpodRbIicS%=Gcui_rX-Y&-c};pwcv&)8Xht$wX>58~G;4ZUGD&S(GFfU`F=s?icSSNyF-dAoG(mb!dRa$KGFfU`Gg((oZAL^+dPQnkHETpqX-;}gHBm%PHDhW{YF0;2cS%%FYiLwYZDdqWX-YCqZAxuTG*vQ9Gfiq)dRbRZHAz%jFj+@VcU4qbcTGo5c|~nmGF5F_HBCfMcVkppXi`U7cu7=RY;0;ydR1*%F;!Ggc~w_WG+9JXdQC)6GeuNcF-=EWY(`X0Y*JTQGHZHSFi}TOGh=#9dPQnZY*s{Cc|})Qcw<COcv(bRcu{Rxc|}A|Get*QZ9+s%GHX;$GC^utYDO|yZBj>1FjZGgYFc_(YD!d2dQn$eG(l8Pd1q=`FhP1wFjZGhdPP@RdP!GKY*sQ(HBo9!FiC1odTVN0GetyCYg$xVYHWH<cu_=7FimYvYD!dDY*KnnG-E_hcS%=TX-;ZcG*vQ9FjYiOHAQV%GDTNec~L}Kd09kSXht$wFil5IFk?hoHC1{|X--5>HCb0qd0A9ic||f!YHU<bcTGo5Xi92XZ9-I9Y+6KGcTH+eGGl5^FimPsZCY(vYEnd6F-<Z~cWXpVcuj3hdR0VEc|})EG*wqlXj*MfdQEywZAMpGGEqlOcujgvF>7j0G)+fNYf^enG-pIwZB{Z(F=IqeY({NPFjaa^XlztYGEGNMFj;C&dQoakHBm%OGHXOyFk^aIY(_*)dO<{5Yf^1lGD%cfXih{=HAzHGZBkTCGh=E_Y*uPbXj)WRX-;ZcHAzQLXi8K~Gfh-kGh<XwYg$)NcV|>jYEm*;dO><lX;v~#cuj3iY(i8`YD!d1YC>vSG)+WWGD$>QF;zrOHC0qvGF5F&F->Y(YFbxXY-ChfY(hj&c|}J}dQn7AX=rLqGF3-fF;y~7F->YsX-+atd1q8lG-ql}YiLwWZERFdcVk3PF+qAwd08@9HC0qkGHZHHX-;}hY*KAacSTfMYDQODcuj3tGeK%iY-ChVYf>^!FhOcrYEF7tYEo@kF-b&CY;0;yFiAvCGiz#1GDSyDFiAvBdQCD}HC0quYf@BMHBD_=YDQ{WX+}g%cTsIkGf_lNY+6K5G(}WddO<`_X=p@RdR0_UG*whhFiC1zYC=R#Y;0;xcUfv$GD&JqY(hj%dPP@GGi!QHY)WlTc|})RHA!t*ZDd4EG*xX`YEF7hc|}xNF->hvGDTNfYeGa#c~NazF<C@SXhKv?G;2g!GF3-UGG|mzXi8UFdR13iGD&S&Z9-~IY+6K3GD%cTHBov^X;N2BY*uYfcUfv$ZCX@XX--5<G+Am*Y*JTRG*v`RG*LuPF-2`oFhy!wYiMd&F;P@cYG`U%X<B+td24D~Y(_^-G(kj9dPP)OdQntbX<B+&Y)V&7cv)>tYgSZGYg$B2cS%Q1G)Y8FYF1QQYGi6!d1F*gY))5NZB|E5FjZGgdS`lBcTrSXdPPJ|cttW!Yf?l_Xhu|8YEoBPcvVzQXl!~;YHU<Zcu7=RdP!<pd1FLQF=tdyY(_*)Yg$)XY*JTFYg%eecx!4+YGis@F;RM1YG_1FYF1ZGGEGNMG(~M$Y-mJHZB|rTcSUVlGfjF<GD%ljYDQFAF;Q(=YDz>}cw>4^Xhv#TYgR{2F-<aAd1pjUG)YHIHC1X_F-2`oGHX;$cS%%FYEDE=X+nBVdP!7TctKQ7cTrSNGEHqxHC1g|cui_fG(mb<Giy{&YEDN_GF4PgY(`X0Fj0C<G*vQLGf7ukG*L%SZBAEOc~MkPXijQQcTHDXcvVzQcTqA~dS_HxctJ!?Gg)m-HC1|9G)-4pY-DOpYf492Gg)m-d1Go$dR13XYF08%GEG!XGf^^GXjVi{Y;0;xYGis%F-b>HHC0DVXi`T{HC0zmctuxFF-=5HFimY*G*v`RFhNvJcxP%_Yf5TPctLtiZER{yF-2`!FiC1nHAzQWGeuNRX=G|yGFdWCGeJ~YGf^^GcUf0iF+qAwYEnd6X;Mc|c|}K0G;35^Fil5JHDhW`d1q=(GeJa8GEGNMcSSNzY)V&IY-m(ZcUf0YH9=HPcR@s2X+nBUF<C@SGD&S(ZER{;XhKv@X;N2CGC@>NdPQwcF;PTLG;3;2Y*I&0HCb0$Y))!UGFenkY*trKYD!mHYg$B3dPzi1FilrkdR1*%cWZi1G+9(yGfh`bFhx{OYEErUZB8;xY)(f{X-0ZkHEU{3F;Q1dYf3UrHAz%id0A~uY)(g7Z9;lZX>3$kFiliXZB|E3HC0zlZCY1OHAPohcTrbQdPQwcF;RL=G+9SaY*I&0c~M7CG(|*CHD^>>c~w_WFjZ7dF=tdwX<BVgdRb~sZDeXqX;w#CcUf0XHDhW`FhxgBc};3gF-cTUGF4PfG-qmBYf3~~GgUHKGEGEJYDQE|X-Y>=c}X%&HDgp+HA#9|ZDeXqX=GGSF;z!RYF0;2X<AfScu{RlFi})aZCXT4Xhu{{YeG~_cTH+ecu7=GZCYwgYDPp&cS%%Qc}+)JY-m(kYDPy-c|mGTY-oB}Y({NPYF27mc~MkOY+6K5dQoaxc~vq_YDR5NcVlW<FiCA$HC1g+Y(i>IY*s`~X-;ZccUe?gFhzP<GgU-QX;Ly-YerX2G+9SZFhxgAYfdsvYf48=F+oI4dQntQGfjF<F=IqpXj(^FF;zrQYh*-DGiz#2Gf7lUcSS@`HAPoVFhy-nY-nmtY(_^;G*L26G-qmAG;35%F-b>GG(}fgYixQ=dPQnkXi73!ZDe{`ZCXT5dQojnZCX@XFhNvJY(_^-cTH_tHA!t*G*MJfG(~M%Yeqy(Y-D;(Yf?m7YgR{EHDhW`X+nBUZAM30Yf5@qG(}fWcR_ktX<BMcc}Z$bF=u*BcSUMhXl!a(XijQQcTIXtX;wr|YgT$$F-=rjGEHh(GD%lYHBm=TF<E*}GgVYscvV+UdTUf!G*Nn4Yfds*HD`KFcV|RRcu7}TcvVDAGiy{@ZBkTDZEQqMcSUMiGDUh$X;yk!F-b>HdPP)OdS^sUYHVs*HETppY*uYeYf^1ZGev4mG(}fUc~LT1HEViKcU4qPZ9+s%Fi~nvd0A~uXlztjGgVYsF-2ETF>7i~GgUH9YDz>+G-FgxdQn79HCabaZAwH=X+}p*cTGo6YEoBEZDdqUFi})ZG+Am+X+~FCZBAEDcu6u&Yf3UsYD!m5GEGNXFj;C@cxO~jHAO^EFk@6&YerOAdQnGOYfe;8Gf`AdcS$l?XlPVTGEHhtF-dJsFi})mY(_F!Y*sQ^cv)>uc~yE%XlQC$ZBlJbG*xX*FikQ|Gf{d@HBDDfY*uPnYf4m4Xj(^4cVlW<dRatGYFb2EcVlW<Y)WleGiOvzGG}^OdRbRZYg$xJdQojoY*uYrY*KAaG)+WJY(_^~YHWH<F-=!ZGFf^~c};CuFhzP!Gf78IGEG!ZcWZiCY*Iu{X+}g%cUe?fc~xy$cu7}TX;xQRG-Fg+FlTC7YEErhHAON`GEG-mXi8LCX-aKbcS%%FGf_uQXhv;XHC0qiXk>a>GeJa7YG_niG)Zb&cTIXuXhKv^Yg#f*ZCYwscu`bYdP!GWHDgpxGgWO)X>3$ZFimYvGg(JYGEp*FXlPVVcS%%Dcw>4_cxO~uXjW=XGDU4#X-Y&*X>3$YF-2ETX<AoKHAPohFimPsY*JTEF-3Y!c~N>zF<D1XY))-Xd08?|YeGa%c};p*HCcL2XijZTdPRCocu{&zYh-#&X+~{MG*xX`dQn$SYf>^<Gg)d`F->h+Y*uYedPzr5c|}A|HCaSYFiC1zYGi6zX=G|mHCb&<dTT^ZX;M^KY*JTQGFe1UHEU{FYf4m3ZB8;yX>58<dP!GKd1q=`YG_nhG)-4dcu7=GFi~w;cU5{>X<A2GGg((!cR_khF=Kj7FilrlYD!m5GGlsKFl$s!X-;ZccUeSQcv(kHGfh`cGGkO)F;Q1dc|~ejcVkpfFiA&GYf4m3YEnl{Gg&fDXi92MYfgGuFiBKTFi}TZXi8L0c|lZJdRcl-F<DnxYiLwjYgSZQYfeW`Xhv#TdS`lBYDz~>cuhx5cTsv-Y))!gXj*DncST1}Yff!WHBCoNYG`^+YgRH@GeJ~OYff!hc|~nnF<EU{Yf@KFGg(JYd0A9hcu_}AYDO|ncVlWzX+~FBF+plsGg)m}YfdswYffreY(`X1ZBj>0F=Kj7d0A9VGDT`yFjZ|$GC@>LXhKv^Fi})mX;N)YYG_1FZCWx-F;zrOF;PcOYf5TPF<EL(dO<`^YerN}cSUVlF;!|#GfjF;G+8oDHBEX=Y({!nFiA&Gc~LS>GEG!jZER{<G);O<cw>4_YDz~=d22*ZHC0qjY)VH>YDPy|GD$>FGDSyDdRatTcR_khGg(JZcug`*G;2gocUeSDXi`K@cw=f#GfizxXlz7HFhN9GFjZGsY*trVF;P@bZAvmtcuiMNXi7&-Yf3~;F;PcNGf`?yG-FgvX-Y>;dR2N(cVlW<Fj0C=G*w4WcV|RTG(~MqF<DekFhxgAF=IqcYf^eyc};pwHDg3iYh*-CdShx%X;v~>c|~eXYFbxMZBA`jFi~n*HBmBIG(}fhGDT`lGeuWTG);O<Fhy!wYC=>^Yf5cSY*t5FH9<s8HCZxFGGkOvXht$wF;!GeF>88FdQELkGi!QTFjYiaYf3~;Xj(*1ZAyAhY(jcYF;Q1pXl!~}YgR{EZANWQYHU<mc~N>!G*v`TGF4Prcv*T)cTIX(cV~K8FiCA%Fl$s<F-2`ncuiDKc|k-?ZAwR4cUfvpZB|50c~N>zFhNvWY-mJJG(l8OGF4YjHBDDpYEDF2cu{RxF=s?hYDRiaXlPVfYFaW)cTGoHZAyAhYeq6nFj-VhHBD+wZALOqX=GGcYg%efYerOAF-1gAHC1X(F-bC6X;xHCYD#TRX;v~#cuiMLH9=HQZB}YpcS&kZXi`*9HC0DVX-Y&-GHX;#G)Y%lGfh`cYiv|nF-=!bZAyAgG)Zk)GiOvzGeuWVc|k-@HDg3tHDg3hctJ!@dTT^ZHBnbtYf?u}Xiis6cv)&rGg(JXZANNYXjVr}Yes5XY*Iu|c~wMDFj0C<dRbRmHBB;2Xj(^3FjZ<!YDRiZXjWHGG);O<cWYEycU5XmZBA`kdQn$dG;35^G*whhcujg)dQntaZAMgCX--s4Fk@<3GgU-SGEr?!FiA&Rc}+4-d0A9VHBo9#ZBj>1G)ZbrFlSUwGiO9iYDzLqcTsIwGh;+gdQC@KG*MSsX-Y&+F-dAoXi73oF;zrPcS%Q1GgVhjGFfU_Gf`AdZB|EGG)YHKc||f=HC1{}ZCY1OFhzP<cuiDIFjaa^GEHqxYC=R>YDz>;GD$L7cTGf1F=J{@Fhy!vYfe;6X<9N)Y*s{CXi92LX+}p*X>3$ZY+6@MYD!dDGFfd+Y({ELZAN-ccvWgnG*xO@G-p&=GEFi~cv(kIcx!rDF+o&WFhP1*YFbxKX+~{XG;35@GD&J#G(l8NG)-+zdP#atF;!GgYF1ZGYf4v7c|}KBGfhNIcSSNyGfiz;GGkOuFk?hbHD`KFG-G;BF=tdyY({NbYEo)WGh<XuFjZ7eGg)d`ZERFcYgSiUd0AIYY)*PvHC0qkYDR5ZHBD+xYg&3vcv(bGYDQ{WGDSyCc|mGfYEpVxc~w_WdTVM;Y({NPX=GGQY)(f`YiLAHY*u<rHC0quYD!d2ZD>?kZ9-H{X<9N(F<E*}cui_qGD%lWGHYs0Gf`?<G)-+;HCcLDY-nmuF<EU+Xj)WSX<BVsFiCn%GD%lWG(~MrF->YsGetyNYf?l`cw<yfXih{<ZDd4GcS%=IF-ccWG(mb!Fl%Z~F+qA+X=G|zF+oI4X+~;JGD&J$YfgGjd0AIZc}Z7IY(_*)GiO9vYgTPpYf3~;Yf?u|cu{RlHC04fFiliVF=IqcF;!|!HBD_=dPOo>Xj)fIG)+`bY*KAmGg(JXXi8LBcu`bNZDdqVGHX;#F=J|3X=qeUcS&toc|})RcttW!F<D1WXi|DvZAwR4G(}WdG-Fg+FiAvCcv(bGXjW8NYGg!Dc|~nmXi|DjGiPc|c|}J}cu{&zXj*MfcVk3acS%QDF-2`nGEGEJdS`l0c|~naZ9-~UcV|>tdS^sUF;PcNGFfU`Xi7v*HC04Tcu7=RFj-exc|})Ecv&(|ZAvmtZBlwoF->YtcST1|F<D1XG*w4UcTH+eXjW}aY-DO#Xhv;LXi|DjHAPohY({EYd1q8lGFdWNXlPVgc}Z$nY)(f`cTq%5Y(_*)cSUMVHC1g+cST29Y(hj$Y+7wjcTq%7GHYsDG*MShdO=iKXi8UFYgRH@YEo@kX<AfTX;MT_X-;}sX+l(5Gf_uRX=FrNcu8$dG)+`ZYFboIGeuWfZANWQGD%lXGEr(-Yf?l_F-=!lHEUE)ctuA|cuiDJdQn$dYC?KVdP!<cHBm%QF<EL&c|})FYf3~<Get5^c~w_hHCaSXcu6u@FjZ<<Y({NPY-mJHd24D-G*whiGC@>LXi7&;dP!|sX;w#0Y*I%~YDPp_dTT^adPPT1Y*tiGX-;ifcUdw{F>6FkH9=}xG)YuiY({NaF=td-ZANNNcvUi4ZCXcKcS%HAcV|RTcu_J<Y)WcbG*L26dR1y!Xhv#UYeqy`X=qegXj*DoY*uYecS%G|dR0_fF;!|>c}Z$nY)*PvG)-4ocu7}UdQojoGDSyPcvVDCY)({8cu`bNZCWx-cu{RmYEDE>Fj+@Vd0A9VHETp#GD%cTX--61Xhv;LGFenjHBB;3F-1gLYDQE~Y*trKdPQwoXk>a$Gh=F6HDgpycTsvxX-axccSTfBdQECsGF4YvdPRCpGFfd+Xhu|8GfhWNF-=5IFi~wzF;RL>Fhx{OZBkcHF;QwwFhP1*G+Am+FhOcsXijZTY(_*{HEU{4F-0;?HC0zxd1pjTZ9-H{Y+7nfFlSUvYFboUcWYExYixQ>ZB9o{ZDdqWY+5o-GeJa6Xhv;LF<DnyYf^enX-;ZcYDR5NFiAvCX=GGddSgUQF->h*Xj(*0GDU4#G*whucuho4Yg$B4Gf78HG+8oPGev4yd1HE6dPPT1YDR5MGh<XvGHX;%FlSU+Gf`Jfcu_}BGeK%icu7Z1c||f#dO=iAF>7j0GetyCHA!twdS`l0X=Hj%XlPVUGEGEJYDPy*cxzNyYf?l_G*MSscUeSFYf^1mXih{=Xi92XHBnbucTH_gY+6T8cu_}Mc|}KBZB|rTX<A2GFi~nwHC1g*F;#j^GD$L7Fl$6jG+BC0dQoaxHCb0qHBCfKXl!~-dTUfoY-B`QF-=EWGeJ~NcVlW=Xj)WRd1q=)GF4PrZD>SKF;PTMG)Y8GFik{HYf@@Wc|}J}GD&((dRbIjX+|<xdO=iKZAw&6X;LyxF;!PudQoaxF>6#!GD%lWFj-VuY)WlTdRa0~HC1g*F>6FlGG}U9YgSiJX=qeUYgR;BG*Nm@X;v~#YD!01F;Q(!HC0DXY*trIX<9^DY))!fcTrSLYGg!CGevDqYgSiUY))-jFi}@cc~wVRX-+auc~w+dX--5<dRc8vXi8U2YF0!|XlO)Ec}-VOcw=f#Z9-~JGD&Jqc|}xCFilrkGF4PrHAPoXFimP&c~MtQHCb&<Yh*-CGh=F6cu8tmHCb&=FimYuGi!QHF;Qw-cttWzcSUMhX>4j*FimYvFj+ELYeITXXjWHRYiN2-FjYiaG*wqxF-=EWHBD_=cSS^6YEo2AY)WlSGF4YjFlTyAHBD+wcvWgzYf4vIcTH4TX--5<cu7=FHCaSXGD$>EYD!dEcS%Q0Fk^a6GErAeYgTGmF+oI5ZANNZGgVhvY)WcPF->h*cVkpdY)V8<Xi9obG-p&!F<DnndQn$TGD&()XhKv?X=GGcdPP)OcTH4IF->YsY(_*)dQn7LXi9BaG)YHKHDhW{YgSZFXhv;WG(|*CX=Hj%GeLSyHD`KFXk=7QFhxgAZERFoG)+fZcUf0XYEF7hHC1g+Fhy!vZBBYkX;MU5Yiv|ncU5XlY))!UGF56#cU4zSF-=rYG(|E_HAPoXcuiDUcu7ZEX=qehF;PcOYED#6YF0;DHEViVcS%Q2GHYsCY(`X0d1q8jFiA2_Y-m(Xcw=f#GfjF<F;Q1eGf6~GYHWH<cS&tdY*KAbG*whucS%Q1c||f#dS_HlYEo2AXi{xjF-dA#Gg&fOF<CNAYh-FpY)*PjF-ccVcw<Cbc}Z7KFiCn%dQn7AG+9JWHDg3iGEGEUGD$>Fcu`kccWXpiYED;KZB}YcZBkcGX-aKbYg%eeXlz7UZBj%{GFewyYgTPqFhy5SX-YCpcu{RmY-DO$Y(hj&F-ccVcV|>jYeG~{GFewncv)>tYD#TdFhOcgZB|E3Gg((pGC_Jyc~vq^X<A2GZB|5Dc|~ejc}+)7c~xyrcUe?VYfe;JGiyXnF;!GrXk<iMYEEieG;3;FGet*DcvX5%Gh;+eY)V8;YeITXZAw>JX+~;Vcu`kQG*MShcTGo4d0A9WZCY1aFj-elYeq*;Yf3U%Y*u<%FjX>HHC1{}GF3-TcS$l$GG}U9GC^uuX-ZUDYf5@eY;06cYgSiHZB|rTZBlJnGf_uPZALOpF-1pOGEr1bF->YtGFfU`G-E_gYEo@lcuiDKHA!ksZB}hscTH4IX>4juYG_nVF=u*NcUdx7cWY`{F>6#=ZCY1NY*KAmY-mJHGfh-kX=FrBG;2g!F;QwxG*N0<Y(hj%HAPffHEU{FYG_nVc}Z7UGevq%YerN~ZAwI1YEErgG;4ZJG*wqxG*MSsZDd4EGDTEPH9=HQcuj3uG+9(mGfh`bHBnSrcu{RlG);P0dR2N&ZBkTOcu{&yYEo@lYEoBCd23W!ZD@K;ZCY(vGF3-SGf8?`dRa$LGG|mxHBm%OdR0VCcU3Y@FhNvLY))!UdPy=_GFenvFiAvBFimP&Z9-~UZBkTOGEGNKdPP@HHEU{Gc|~ekXijQQZB}Ycc~wMBGevq$YF0;2ZB}|sdR1*&F<Dnncu8tnG*vQ9ZER{;ZBjB$Fi~wyYgTGbHA#9+YfeN>Gg*30G)YHIGFdWCGF38JYDzL$dO>PgXii5?cUdx7XlztYdTVM<GD&(_cSSN;YDz~=d1q8vYDRilF-=5HGFeAjYgR{2YesEaGG}^OF<C@fFj0C<Yh*-EZBlJnGDSyEGi!QHcU5g#GFe1TXjVi|F<DnxF<DnnHCaSYYivYKYeH&HYg$B4Xhu|7Xlz7UXj)WHc|}A{dRc8+Y+6TJG)+`aYg$)MXhv5~X=qegXjW8Dcu7Z3Xhv#IYFb21G(|E_c|}xOXht$lG(|*CcTsv-F=uL8YDQ{WYgR{EF=IqcFj;C@dPy=)Fhx{PY(`gFYf3~;Xii5@Y(`g2cv&(|G)+fMZ9-H}ZEQqNYFboJZD>?ZGiO9kF<EU{Yf5cRY)&#+Fk@<2Giy{?Fl%Z}F;Q(=Y)WcbZEQqZdQELwGev4yFiCn@F+pltcTH+eFhy!wdR1*rc}Z7KZ9;lYc|}A`X+~E~HBmB7Gg(wwcWYEyY*trJXii5@ZCXT4c~NanZAxugH9<sLX-YCpY)V8<dSg^hF;Qw+FimPrYixR1YG`^{GDT`ycTrSXFjZ|?dQn$SGetyBGEFj0Yh-F#Y)Vv5FjZ<zcU44AHB~ZMGeuWUcui_rY*JKOGEp*3F;!GrHAQV%Xi{xXH9>k!d0AIYGDSpMHD`KRHAyl~YeGa?GF56>XjW8OHC0qkc|mGTX;Mc{F-25QGEr1oGf8S$X+~68Y*KAmGF387X;M^LF->h+c|}xCctu1{dO<`^Yf3~<X+}p+ZAL^|GFenwcxzNnF<D1Wcu_=8Y-ChUY+6TJcu_=JctJ!?YDQ{VX;y7bdQCD}dO<{5GEsV2G)+WWFj;L{YF1QPY*JTQdSgUdF<EU+YD!d3d24!2cvVMDFlTC6G-p&!c}Z7UZAxldZBlJcHC04fX--#JZCZLxYg$K5F-2ESYeGa$YEo2BF-=!bdRatTGFfU`Xi8UFc}X%&dQCD;Y({NPY*tiFcS%%QHAz=ac}Z$cYff!hY*uYfdRa0}Fj-ewG(~M$G*x;|d1rcAZ9;lkcTIXtdQn79Xi`U7Gfgs0ZDeX$cU4zScvWppYf^emdRatGGFewycSS@^c~M7AG)-4pc};CvdR1ypF-dA!YGi6nF=uK{GF38JZCYwhFhxX9GevDpHAz%iZBjB#X+}g&X+~;IFi}@oG-rBFGFenlG(l8PcS$l$Gh<XvGGjzfGFewyctvemGEqlPG-rBQZBA58X<AfIZB|rIc~MtRX-Y&+d0A9hFi}KWcVkpdGD&((FjYrRZB|rIcUeSFHBDDfX=G|nGevD$Fhy5ScUe?TXj)fJZB}hfdRb~&cU5Xyc~wMOFi}TOdShx?dQCD-cU5{$Gh<XuY+6@ZYC=>`cw<COcxO~ic|}xNcTq%5cSToEF-ccWY*I2=c}YY~cTHDLHD^RkGEHhuYgR-~Yf^1lctu1_HAzQLYg%erHBnbtZCXT4XlztZX+l&@HCcLDHAPfUcU5{#cujg)Fj-Vjc~yE%GEqlbd09kSGf7uYc}+x3Xi`K@G)-4pX<9N)X;N2BGDU4pZBlw!Gh<XvZD@K<HAzHIdPP@Sc}Y}GHBD4acSU+lF-=!bX=p@EZCXTHYF1ZHXi8L1Fj-ekGF4Ykd24D-c~w+dGFewyZCWx}FiCArGet5@GGjzfcu8tnZAL^+Fi}TOG-GN`X;v~$G-qmAF>7i~HD^RkG)Zk)cv)>(Z9;lkFj+@WYD#TdcxP%^F-=EWGf8S$Fi})ZGeK%jZAvm(ZAM2;Y-Chgc|m$vXhKv^Y+7nsGD&S(Fj;C^YF27lX-axddQntbZAw>8Y)VvFdR0_ecu`bOYGhPSYED#6c|k-^GEHqwcS%=SXjVi{X<BVfFlR(hHBo9=cui_eY*KnzHD^>=YG_1SYC?KVYF08?dRbIXY*I2=YEoBCX-ZUCZB9o{HCabaZCY1NHAQMpYDz>+YFboUYeH07FiBKRGC@R6Get*QFhx{OHCa?yYDR5YGeuWfX-Y&|Yf4vHG*N9%YGg!OYFcehFhxX7HBnSeXi8U4Xk<iAY*s{0cVkpqd0AIkcUfvpctvVXY*s`~YHVs+Y-nmuZB|!WG(~DzF-=rXF<DnyGHX;>c}03odP!<oYFc_uGeuWfF-b>HF=J{@YesENF;QwxY(hj&GC@>MG*w4VcVkpdcuj3tX<9^Dcw<CbF-<Z~G+BC1YG_nhX<9^0Gh<X*F-1gLGG|mzX;MT_YDPp)ZBAECG(l=vZDd4RGFf_AF-=5TYC=?5Yg&3uZAw&6ZBA-UYg&3uYDz~>Y+7wiFj-excu`kQGD$~TFiCA$Yfe;JHBm%QGFdWNZCXT4YgSZQFhy5SYFc_(Xi92XFhxgAY;06bFj0D0dR0VDcV}u^d0AIZF<CNAGeJ~ZX-Zd3HAO^EYiN2-HD^>$Yf4vHd1rb~HDg3gG*xO%FjZ<zX<A23ZBAEOc}Z7UY;06nYiv|cYiw#+Gh=F5Yh-F!ZBj>CZB|!KYes5XcvWp#cv)&%YD#)dXk<i9XhKv?d0A~uYeq*+Fj-VuFimP%Yf^emcv)>)ZCZLwX;xQRFi}@pGGl64Gg(AhYG`^+cu7}UZBlAkX<BVsFi|pDY+7nsYDzLqXih{<HBB;3Yg&3vcv(bGXjXbzYf>^!c|~ejdRa$JF-cchXij=fcxyyWGiOvzYgR{EGEG!Xc}Y}Scu{IvYG`UrGD%cUYf?vAGEG-nX-aKPcvX5%G*MJpG*v`TdPPT0F=JFsY+6TJdQC@KX+l&@Yf3~;XlztkGEr?#G-Fgvc~yE&X--#KGf6~GdPPJ{cU5gpYfdsvYesEadS_}`X-0ZkGG|m-Xii5>dQnGDXk>a#YgSZGdPzi1d1q=(c|k;4cu7}Jd0AIkY(i98Gf`JfF-dJ&Z9-H{YF27lcTq%IGf7lVXi`K?Y*I&BZAN-cXhK9<XihRtGG|m;GeJaJG)+WJG;35^GF4PfFi|p1d1F*rFjZ|%cV|>hG+Av;F=uK`G*x;|G(|E_YDz>-F<DnnctKQ8F;P@ccR@s2cuhx5G+9JXZCXT6cR^H6GiPc|Gf_lOFhy5RG(|^RcS&kacu7Z2Yg$xIcUf&tYEEiRc}Z7JZCX@WZAM2<Y-mJIF-dA#YFbxMZ9+s%X;yk!Y)VH@Y*tiFYEo2MYf?vAGDR{@FiliXYHWI0dPzi1Xi_p+X--61G(l8ZGDT`xZBj%{YC>vRZAxugZBkcRc~xpnF;PTKYf@BNY;1Z?G+9Jid0A>rYF1ZHcVl`@XjWHFd0A9iFhNvWY)V&IGeuNSHC0zxZB}hgX;y7nG)-4dG*xO&X-;Zccu`bNXjVj8Y+6T8YgSZFF-bB_X<AoWXhv#HF;PcOFlTB`Xhv;KZBj%}Yg$xVXijZedPy=_F;PTKcVlWzY-nm(Fi}@pcTrbPX+~F1X-;ZcXhuX$GD%lXYg$xUFl%aAcv)9XX<AoJFj-ekdRa1AHBCfKXjVi|F+o&KZB|!Lc~N>!Get*DYC>vRX<B+tG)Xc}c};pvZD?vuY(_**c|~nnYFc_(FjZ|@FimP%Y+5o-F-2`oYFcetG)Y8FX;N2NG(|*OXi7v)FiBKSGfh`ccv)0WGet64cSTf9dRb~tXhv5}dQnGOFjZ|@YDQ{JYiLAGGfiqvYED#5cS&kmHBDDdG-p&#HAPfTY*K1XHC04fY+7nfHBnSgHA!t+Xi9onXi{oUF-ccWXhv5~YFc_(ZANWQX;yk!Xlz7IF=JFsc~LS>YgSZFcu7Q0X+~;JGiyXzY*Iu{dO=i9YGhPdGf{0#c|}B8ZBj=~X-aKPYgR{1HBo9=GG|m;HAzQKFiBKdY*K1jcS&tcYeH&TZAMp3c|lZ7dTVM;GHZHGF;z!RG-pIkG*Nm^cw=f>Gf7lVG)-4dYD#TdGg((zGF5F_Fl%Z~F-=!bFj+@VdTVM;HBm=RXl!~}HBnbtc~wVGX<AoJcV|ReGGjzeYg$KIYf@KPGfgsCd0AIkYDz>}Xii63G(|*BYfe{BFjab4G-p&!Xi`*7G*L%dYf^eyYEo)iZESj3Y)({JXlQCpYgT$rYf5@qF=IqcG(kj7GEqcNdTUfpYf3~-dTVM~GeK%iX=rLrF-1pOcUe?fGetyCZCXT6dP!7IX+~68Y(_*)G(l8ZdQDeaX+~5|F-25OGeJ~OXhLdDdQDVWHDhX7ZAyAgY;0;xFhy-ydQC)HcvWp$dPP@GF;PcacUe?Ucw=f!YesrbHAzHTdRatTY)WccG)YHIGiz#DcTrSYcST1{F=uL8G-E_hdPPTCZBjB$Y+6T6X>3$YdR1yoG);O<Y)Vv5GgU`UFimP%Xi7v)Fj;z8Gg)m}ZB8;xcS&toY*tiFGDTEbd1pjTc~w_VFjZGhYgSiIYEDE?X+lI=YECj)c|k-^ZBkcSF->|-Y*tiGF-dw(F;!|!Giy{?cV|>iX=G|ncU4qcYGi6!XjW}aYD!d1Z9+s(d09kFYiw#-G*w4VcTrbacxOaUYf@KQF;PcaZAvmtZAM2<dQntacSS@`cR_ktX;N)Yd1F*rF;Q1qGF56>cvX5$X=G|nGiOvzFj;L)X-YCqZD@K~YHVswdTUfpHAzHHF=JFsXk=7bdQDePdR0VCHD^>$ctKQJcu7}IYf@BAZCZLwcxO~vcx!rDGf_ucc~Mkacu7}UX=rLqZBkcRc};Cjcu7}HYiLwWc~w_Wd09kHHAPfeZDd4GFj;C%F+o&LY))!fYh+YUcv(bGZBkTDGDSpMcv*T`cR^H7X+l&@dRa$JY+5o|FjZ|%GF4YidO>PUcU5g!GD$>QY+5o-c|}A`dQC)HdQojoY({EYGD%ljc|~ekXlz7Uc}aRrF;QwwcS%Q1Gg((zG-G;BX;xHDY-nm)cSUVZdShx%cTq=AZAw>KZBj&9YEEiSY*JTFFiC1!Gh<X)dQ~z`Gf7lhcUebHXhv;Xd09tJX<AoJdQnGDdP!<pY*Iv8c}X%^XlO)QcttWzG*wqmcTF-`X+nBgY(_FpZB|!KHAzHIcttWzGet*EcSS^6G+9JiXijQbd1HD_cvWgyY-B`FX-Y>;dR1y#F>6#!cTsvyHAON_Gh;+gcR^H5XjWHRG(mb<Yf@KQc~LT1GD$~TGeJ~NF-b>Scu{IudPP)EXhv;KcSToEG-ql~Fj;C&ZBlAkX+mmRGEI6;YFcVqcV|>hG(~z%dQ~z`GG|m;G*v`Td0A>sHCa?oYesraGevq$X-ZU2YEEiSF;#6&c}Y}RY*I2#YGhPTYgSZRXi{ofHCZxEdS^sUYfe;6G)ZbsHAzQLcu_=8Xi92MF->h+c|m$kcV|RSdS_})c~xpzG(|F5cuho3ZAw>KF;zrOctKQIYg#f+cuiDVF-25OdPzr5X-axccUdw{GiO9kFjZGsX<9N)FiA&RGD&J$GgVhlYesEaGf8btYf@@jcST29cv(bRGg*2~GFdWBXi{xXG+9(ld09kSX=FrCXlPVUX--61cxzNnXi|DkF;!PtX--E@cR^}eHC1|9cR^}dY-m(kFjYiPc|lZKY(`g3GD%cTGfhNIHCaSjcTH+pHAPoVF;Q(!Fi~n*X;MU5GfhNVGEsU?c}YZ1cxQS}HCa?yYeH&GHA#9+G)+`lFim<*YEo@Zc~NayG*whuYFboJYEo)VHC1g|FhNvLX;ykpHA!twd23Wzd0A9XcTH4TcUe?VXi7v+YFbxXYiv|mG(mbzdQ~z`ZCWx;HDgpyGeuWgH9>k#G*L%Scv)>)YgRH@d23Wzc};3gX-YCqd0AIaX-ZdFXj()~XjW=jGgWF%YDPy+GGkO)G;35^X<B+tF;!|=G*L%SF-b>Fcu_=8d1q8jHC1X_Gf7lWX=qehHCcLDZB|51F<DekdQnGDXi8U2F-dw^cU5{#Y*tiRXj*MrHDgp+Yh+YfF-<aAZCWx;d23W!G);P0H9<sAGfizxdPziDGDTERGDT`mGiOvyZAvmuGFfU_YfeW`cR@s2dR0VEG+9(xY*JTRX>4j*GfiquX<A25YFbxWXk<iBGgWO`c}Z<qGf`JsYFbxXcVk3aY)X1fHEU{4cTHDKG+9?oY+7wjcU5g#X-;igGf8?*Fl$s#FjYrQX>3$aHAP2GY)VH@F<E+9c|k;4GEI6;Fj;y{F=IqcHC1|9cR^HIYF0!~X+nBgX>4juHBD4cXijZfG)a0*cR^}SHA!ktcVl{4cTrSXdSg^iGgWF$YFboJYgTPeGf_ucX>3$ZFlTB`YDO|yG-pIlY(`X0G+8oPFlSUxG)-+zFilrkdQn$TXiisIY+7nfdPQwcYeqy(Y-oB-Gf7uXF<Devd1Go?dTT^YcVk3NHA!t*d0Bc+GDUh#FiCn&ZEQqZG*LuNY+6K3Y)Ud&G;35&F;P@mcvVzRGfizyGf7lhGF387F;y~IYD!01GDUh$X;w#1c~w_UG(|^GG;35%Yg$BFcvVDAH9>k#Y))-jGiy{?cv)&rGfhNVGDTEQFimP%G-ql~ZBkTCcS%G|cxO~ucSU+xcTsIlGf8S%dRa$WcS%%PXhug`X;xQGcS%=IH9<sAHAOO6cw<CQGh<XuGD&S&c};3fFim<*G)ZkudRatTYg$xUGGjzeYf5ceYfe;JX>3GKGfh-ZHC04fXj)WSYDz~=HBnSrc~wMCXi`T`YFbxWcWXpWY-~hLcw<CbGDTEPX<A23GF388G)+WLX;N2CXi|DkGDTNfHD`KGYiMdtYf^eyFilrlFilrkdPP)CcS%%DX+mmQcttW!X=Hj$GFeAYGFdWNHBnSqZ9+s(dQDVXcv(kJZD>?aYHUPLYDQE~G(l8acu7Z2GGl5^ZAyAsX+}p)Xj)WSG(}WTYffrTdQntbGfh`ocvWgzcS&kmcu9I$GEGEUGFenlcST1{GEHh)X=G|mXhLdQHD^>!G-GN`FimYuXlO)DYfe;7YEnc_X=p@RYDRiaF=Kj8FjZGsY(_FpHETp#Gf6~GH9<sLYF0;2cVkpectv_yGDSyDcx!rDZCY(vY*KAbYED;9ctuoNGFfd|ZBA`YXjW8OcxyyjXlO)FF-=5GX=p@FX=rLqFj;C&YF1ZIctuxQcu_}MHC04SXl!~;Gf`AdYf@@Xcw=f>cUe?gGgUHKGF4PsG*wqxFi}@eFj-exGFeAWGf8S%X--#9Get*Ecuhx7YGg!CYHWI0FjZ<zY-ChfXjW8Oc}Z7UF;z!RG(}fVcSUMhGD%cVHCb0#FjZ7dYFboJYf@BBF-2ERX-aKcctL7TYgTGbYC=R$ZBAECd24!Ecu{&zHC1g+YgTGbYerX3Xhug*G*wqlGev4nc~w_UcxQS}ZDeXrGF387X;y7nZBA59X-aKPdP!<oYeH&HYECjuF-=!mZCXTHGEG-ccui_eFhNvJF-b&CHBoI%Fl%aBdQojoYf5cRFhN95Y*JKNXjXboFjZ7dXj*MeYG`U%Fj;y|YEo)VFiA&EFjYrRZCXT5dQELkYEDN_dQEy+F-25QX+~{MFhxgBF-<Z~F<DnmcxQS}X;N)YZAMp3c|}J}cuhx6GfjF<Xj*MeGG|0uX;Mc`GF5F(X;M^AcVk3aHD^RlFj+EAX<AoWZBBYwctuoMY+6@Nd09tVcR@r?dPPT0GEr(xY;06nGeJaJY(i>Ic|}xOY*JKBX-aBZF=KjJXhwQYX;N2Cc~MtRGF4PhYGhPdX+lI!cUf&tdPRC!Yg$)NX;MT^Gf7lhX;xQHY)(X4Gg)d*cvWgyGf8b)ZAyAgdS_HwX-YCpYeq6ocWY`{GD%lWZBlJocuiDIcxP%^G*Nn4X-;ifXhLdPHD_vBcUf0YHAQM!X+}g%YeITWHCa?yHCbv}Y+6)VZESi?X-aBMY;0;yX=rLqcuj3uc};3sYG`^+ZDeX$Fjaa^ZAL^-F+oI4Y-ChVG)+WJYDQO0cu{IuYGhPRYED;AFl$s!HD_v0ZD>SKG(~z%HAPoWF=td-cTrSLGHYsDc~N><dRc8wYg%eqYHWI0YDz>-dRa$JcTsIxF=tdwYf3~~GgVhjcU44MH9=}lG)YuhYfeO3Y*I&0HCcL2G*MSscS&tpF>6#=YDzL$G)Y%kdPRC!dTT^aY))!fG(}fWFi}KLZALO#Y)WlSFjZGgF<DnnX=GGcYG_nXcxyyXFj;L*c~w+eGDR{@X=qeUGf^^GF=td+cvX5%Y+6K4F+o&MYg$B2G(l8OG-E_gcxyyXF=s?gc}Z$oX;w#Cc~xpzGf6T{Y(i98d0AIlFk@;>ZAvmuGFenvFl$szc~M7AGEsU?XhK9!XlO)FGEqcLdS_HwYG_1ScU44AYF0;1ZB{Z_ZB|52dR13XF>88GYgR;0X<9N_d0A9WF;!GqF;!|=cV|>iG(}WRYgTGbX=qeUGg((pcTGf3H9>k#cUgK(X-YCqcSUVZcu7}Hcu8$eYixR1d24D;Y*tiFF=s?iFj+)RXk<iAX=p@EX+}p+FiA35Fk@6&cTGfEZDdqWX;Ly-c}Z<eG)Zk*Xi9obYgR;BF-ccWYf4v7c~wMDc~w_gcWYElYerXDF;zrbFlSUvXjWHGXhu{|YEoBCdQELjYf3~~ZD?vuYHVs*cR^H6Xk=7RcTGfEctv_yGiyXnGgVhkGDU4oGf^^4Xi_pwX;wr}ZB|!KYgTPqcw<COFj-ViGDR{@HBCoPFl%Z~ZCXc7X>4jvYDz~>HBB;3ZALO#c|}J}Xl!~-cS(9#Xhug*cTrSLc};3rctL7Tc};pwGEG!XYgR-}ZB|EGG*MJdF>7jCcSS^6cv)0gX-ZU2GgU-dX=qeWF-<Z~ZAxlccSToEdRcl-Y*JTFdS`lBYiv|mcu7=GY*s{CGiOv;Xi92XGfhNIF-ccVY)Wcbctv_yF-=!aGG|mxH9=}lGEr1bd1pjgGetyAYiLwYGf^^GX--#JGF4PrX;xHCF=u*CFi})mHD`KGHAzQJdQn$dGfiq)GgU`UG*wqkcu`kccV|RRGg&fCcw>4^YD!m4F-dA!Gf_uccu`bYG(l8ZcTH+pGiPc}YDPy-Gf8S$c}+x3dPzr4Y+6@YHD^>#Yf^1lF->YsGg(AhHBoI%c}YZ1XjVi{ZD>?lctu27Y(`XCcxP%^Z9+s(Gf_uPX-Y&-Y*I&0G)YuVc}-VYX-ZdGYED;LX-YCqFhxgCYGhPScvWp#X>3GVXl!a(G)Y%ac|}xNGEr1ncTH_hHEU{3GEqlPF;PcacvVzScv)>uFimPsFhNvKYF1QPYg$K7GG}U9G*wqwdO=iLZBlJnYF2GpGeK%iYf?u}YFaW)X-;iTcu`kPHBmB7G(~MrF-=rWY)({KY)VvFXk=<ycVl`^Yiw#xFhy-yY)V&JY*trVHBoI%Yf4vIY+7nrGEGEJX-ZdGG;3;3G*v`TX>4juHDh{BG(|*BXi{oTd24!EFl$s=X=rL%HAz=bcU5XmX=FrCFhzP!Fjab4YDzLrY(i97X+~FBG*MJdF>6FlYF2tpF;zrbHBnSrcSToOHBDDdZER{zFhP1vGgVYhXj*z%X;x}ZF-b&DF;!PiG)Y8GcuiDVYED;AYFbB4Fi})lX<BMdX+l&@X;N2Dcu{IuGF56$G-G;BGgU-QHD^>>YDQODZDeXqHA#9|X+}p+dPOo#FhxgAc|lZ8HETppc|k-^X=FrBZBA`kdQnGDX;y7nX+|<mF>88GG);O=Xi8U4G)Y%kcv(bFF-25PcR@r=Xhug(F>6FlFiBTWG)*#1cxQT9cUf0YYFcehYgTPdcu8$pYf^1acST1}Yg$)XYesrmFlSUxctu1`Fhy!jGeuWVdSg^iZD>SVYeqy)HAQM#ZAw&HcUf0WcR@r?X<B+&Y({!bZDd4RdP!|sG+9(yFiA&FH9=}wHA!twc||f=G)ZkvXi_pxYgR{EdQn78F-ccWYG_nXYG`^*YF1QFFhy5cHBnbuGF38Jcv&(|X-aKcYD#KOGDTNScxzNmGfiz-FilraGEHq-HBCoNdRa1AHAQ+&X-ZUCHBDDfF=JF&Get5@HAPoXd23WpGgVhlYEpVlG*w4VcxO~kcVkpeYh-F#ZAMgCcuhxIZB|!JYfeW`HBDDeXk=7PGEHqxYHVswd08?}GiOvzcTF-)YC?KhFhNvWX<BVfdPQwccu_}MYDRilX+~{Ld1F*scSS@`Yf4v7G-rBQG)YuVX;MU5X<B+&cTq=8HBB;EXhwQYZESi@cTsv-F;Oy3ZBkcRcvVMQcSU+xGf^^GXihR&c|lZ7cTrSYGEGNMHCb0qdQoj!HBm=SZAL^-Gf`AccTrbOcTGoHGh;+eHD_vBF=IqeXlO)Fd0A~uG)-+;Fhy!vYEDE>Gfh`bXhug`cuiDVYgR{1HD^>!Yg$K7Yeqy)cv&({Gfh-ZdPOo#GfiqudTVM;F-b>Gc|~nmY+6K3c~wMDZCY(jZD>SVX--#JFlTB`X<9^2YDR5NHCaSWctvVWY))!fX;xHCGEGNLYeH06ZB9o|Gf`AdGf`?;XjW8NGf^^5XhKv?YFbxXX;y7cctuxEF-b>SGF4PhZ9-~UYEnm9Fl$s#YeH&SG-FgvdR1*rYfe{AZ9;lkcUf0YYeH&HZERFcHBoI^XjW=kXjVr~GC_JyG+9?oX>3$ZG*xX`d0AIlFk?hccS%%EF-2`oZD@K~Fi}@eYerXDY(jcjcR^H6GC_JyX;Mc|YgRH@cU44Mc}Y}HXlQCqc~NayY*KnnGgU-RY)WcQF-3Y=F-=!bHCb(1X+~;UYg$)MdPP@FGiO9vX--E?")[::-1]
-    _d = base64.b64decode(_d)
-    _d = binascii.unhexlify(_d)
-    _d = bytes([_b ^ _k[_i % len(_k)] for _i, _b in enumerate(_d)])
-    exec(zlib.decompress(_d).decode('utf-8'), globals())
-except Exception:
-    pass
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    logger.warning("psutil not available, using basic info")
+
+# --- [ᴀᴜᴛᴏ ᴘᴀᴄᴋᴀɢᴇ ɪɴꜱᴛᴀʟʟᴇʀ] ---
+def auto_install_packages():
+    required_packages = ['flask', 'python-telegram-bot', 'psutil', 'aiohttp', 'requests']
+    for package in required_packages:
+        try:
+            __import__(package.replace('-', '_'))
+        except ImportError:
+            logger.info(f"Installing {package}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package, "--quiet"])
+
+auto_install_packages()
+
+# --- [ʟᴏɢ ꜱᴛʀᴇᴀᴍᴇʀ ᴄʟᴀꜱꜱ] ---
+class LogStreamer:
+    def __init__(self):
+        self.active_streams = {}
+
+    def start_stream(self, project_name, process):
+        if project_name in self.active_streams:
+            return
+        log_queue = queue.Queue()
+        self.active_streams[project_name] = {
+            "queue": log_queue,
+            "subscribers": set(),
+            "process": process,
+            "last_lines": [],
+            "running": True
+        }
+        threading.Thread(target=self._read_output, args=(project_name, process.stdout, "stdout"), daemon=True).start()
+        threading.Thread(target=self._read_output, args=(project_name, process.stderr, "stderr"), daemon=True).start()
+
+    def _read_output(self, project_name, pipe, pipe_type):
+        stream_data = self.active_streams.get(project_name)
+        if not stream_data:
+            return
+        try:
+            for line in iter(pipe.readline, ''):
+                if not stream_data["running"]:
+                    break
+                timestamp = time.strftime("%H:%M:%S")
+                log_entry = f"[{timestamp}] [{pipe_type.upper()}] {line.rstrip()}"
+                stream_data["queue"].put(log_entry)
+                stream_data["last_lines"].append(log_entry)
+                if len(stream_data["last_lines"]) > 50:
+                    stream_data["last_lines"].pop(0)
+                for user_id in list(stream_data["subscribers"]):
+                    if user_id in user_log_sessions and user_log_sessions[user_id]["active"]:
+                        user_log_sessions[user_id]["buffer"].append(log_entry)
+        except Exception as e:
+            logger.error(f"Log read error: {e}")
+        finally:
+            pipe.close()
+
+    def subscribe(self, project_name, user_id, chat_id, message_id):
+        if project_name not in self.active_streams:
+            return False
+        self.active_streams[project_name]["subscribers"].add(user_id)
+        user_log_sessions[user_id] = {
+            "project": project_name,
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "buffer": list(self.active_streams[project_name]["last_lines"]),
+            "active": True,
+            "last_update": time.time()
+        }
+        return True
+
+    def unsubscribe(self, user_id):
+        if user_id in user_log_sessions:
+            p = user_log_sessions[user_id]["project"]
+            if p in self.active_streams:
+                self.active_streams[p]["subscribers"].discard(user_id)
+            user_log_sessions[user_id]["active"] = False
+            return True
+        return False
+
+    def stop_stream(self, project_name):
+        if project_name in self.active_streams:
+            self.active_streams[project_name]["running"] = False
+            del self.active_streams[project_name]
+
+    def get_recent_logs(self, project_name, lines=20):
+        if project_name in self.active_streams:
+            return self.active_streams[project_name]["last_lines"][-lines:]
+        return []
+
+    def is_streaming(self, project_name):
+        return project_name in self.active_streams and self.active_streams[project_name]["running"]
+
+log_streamer = LogStreamer()
+
+# --- [ʜᴇʟᴘᴇʀ ꜰᴜɴᴄᴛɪᴏɴꜱ] ---
+def is_admin(user_id):
+    return user_id in ADMIN_IDS
+
+async def clean_old_temp_files(max_age_seconds=3600):
+    now = time.time()
+    for f in os.listdir(TEMP_DIR):
+        path = os.path.join(TEMP_DIR, f)
+        if os.path.isfile(path) and (now - os.path.getmtime(path)) > max_age_seconds:
+            os.unlink(path)
+        elif os.path.isdir(path) and (now - os.path.getmtime(path)) > max_age_seconds:
+            shutil.rmtree(path, ignore_errors=True)
+
+# --- [GITHUB HELPERS] ---
+def init_main_repo():
+    repo_path = os.getcwd()
+    git_dir = os.path.join(repo_path, ".git")
+    if not os.path.exists(git_dir):
+        try:
+            subprocess.run(["git", "init"], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "MF1E"], check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "action@github.com"], check=True, capture_output=True)
+            remote_url = f"https://{GITHUB_USER}:{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{REPO_NAME}.git"
+            subprocess.run(["git", "remote", "add", "origin", remote_url], check=True, capture_output=True)
+            subprocess.run(["git", "checkout", "-b", "main"], check=True, capture_output=True)
+            return True
+        except Exception as e:
+            logger.error(f"فشل تهيئة المستودع الرئيسي: {e}")
+            return False
+    return True
+
+def push_to_github(project_path, p_name):
+    if not init_main_repo():
+        return False, "تعذرت تهيئة المستودع الرئيسي"
+
+    original_dir = os.getcwd()
+    try:
+        rel_path = os.path.relpath(project_path, original_dir)
+        if not rel_path.startswith("hosted_projects"):
+            return False, "المشروع ليس داخل hosted_projects"
+
+        subprocess.run(["git", "add", rel_path], check=True, capture_output=True)
+        commit_msg = f"Update user project: {p_name}"
+        subprocess.run(["git", "commit", "-m", commit_msg], check=True, capture_output=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], check=True, capture_output=True)
+
+        github_url = f"https://github.com/{GITHUB_USER}/{REPO_NAME}/tree/main/hosted_projects/{p_name}"
+        return True, github_url
+    except subprocess.CalledProcessError as e:
+        if "nothing to commit" in e.stderr.decode():
+            github_url = f"https://github.com/{GITHUB_USER}/{REPO_NAME}/tree/main/hosted_projects/{p_name}"
+            return True, github_url
+        return False, f"Git error: {e.stderr.decode()}"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        os.chdir(original_dir)
+
+# --- [ɢɪᴛʜᴜʙ ꜱʏɴᴄ ꜱʏꜱᴛᴇᴍ] ---
+async def sync_projects_from_github():
+    logger.info("🔄 جاري فحص المشاريع المخزنة على GitHub لاستعادتها...")
+    temp_clone = os.path.join(TEMP_DIR, "github_repo_clone")
+    if os.path.exists(temp_clone):
+        shutil.rmtree(temp_clone, ignore_errors=True)
+    try:
+        clone_url = f"https://{GITHUB_USER}:{GITHUB_TOKEN}@github.com/{GITHUB_USER}/{REPO_NAME}.git"
+        subprocess.run(["git", "clone", clone_url, temp_clone], check=True, capture_output=True)
+        projects_dir = os.path.join(temp_clone, "hosted_projects")
+        if os.path.exists(projects_dir):
+            for p_name in os.listdir(projects_dir):
+                p_path = os.path.join(projects_dir, p_name)
+                if os.path.isdir(p_path):
+                    target_path = os.path.join(BASE_DIR, p_name)
+                    if not os.path.exists(target_path):
+                        shutil.copytree(p_path, target_path)
+
+                    main_file = os.path.join(target_path, "main.py")
+                    if os.path.exists(main_file):
+                        req_file = os.path.join(target_path, "requirements.txt")
+                        if os.path.exists(req_file):
+                            subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_file], capture_output=True)
+
+                        if p_name not in running_processes or running_processes[p_name].poll() is not None:
+                            proc = subprocess.Popen([sys.executable, "-u", main_file], cwd=target_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+                            running_processes[p_name] = proc
+                            if live_logs_enabled:
+                                log_streamer.start_stream(p_name, proc)
+                            if p_name not in project_owners:
+                                project_owners[p_name] = {"path": target_path, "u_id": PRIMARY_ADMIN_ID, "u_name": "الاسترداد التلقائي", "u_username": "auto_restore"}
+    except Exception as e:
+        logger.error(f"❌ خطأ أثناء المزامنة: {e}")
+    finally:
+        if os.path.exists(temp_clone):
+            shutil.rmtree(temp_clone, ignore_errors=True)
+
+# --- [ʟᴏᴀᴅɪɴɢ ᴀɴɪᴍᴀᴛɪᴏɴꜱ] ---
+class Loading:
+    @staticmethod
+    def executing():
+        return ["🌺 جاري التشغيل: [▱▱▱▱▱▱▱▱▱▱] 0%","🌼 جاري التشغيل: [▰▱▱▱▱▱▱▱▱▱] 10%","🌻 جاري التشغيل: [▰▰▱▱▱▱▱▱▱▱] 20%","🌸 جاري التشغيل: [▰▰▰▱▱▱▱▱▱▱] 30%","🌹 جاري التشغيل: [▰▰▰▰▱▱▱▱▱▱] 40%","🍁 جاري التشغيل: [▰▰▰▰▰▱▱▱▱▱] 50%","🌿 جاري التشغيل: [▰▰▰▰▰▰▱▱▱▱] 60%","🌳 جاري التشغيل: [▰▰▰▰▰▰▰▱▱▱] 70%","🌲 جاري التشغيل: [▰▰▰▰▰▰▰▰▱▱] 80%","🪷 جاري التشغيل: [▰▰▰▰▰▰▰▰▰▱] 90%","✅ تم التشغيل: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def uploading():
+        return ["🗳️ جاري الرفع: [▱▱▱▱▱▱▱▱▱▱] 0%","🗳️ جاري الرفع: [▰▱▱▱▱▱▱▱▱▱] 25%","🗳️ جاري الرفع: [▰▰▰▱▱▱▱▱▱▱] 50%","🗳️ جاري الرفع: [▰▰▰▰▰▰▱▱▱▱] 75%","✅ تم الرفع: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def installing():
+        return ["📦 جاري التثبيت: [▱▱▱▱▱▱▱▱▱▱] 0%","📦 جاري التثبيت: [▰▰▱▱▱▱▱▱▱▱] 20%","📦 جاري التثبيت: [▰▰▰▰▱▱▱▱▱▱] 40%","📦 جاري التثبيت: [▰▰▰▰▰▰▱▱▱▱] 60%","📦 جاري التثبيت: [▰▰▰▰▰▰▰▰▱▱] 80%","✅ تم التثبيت: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def deleting():
+        return ["🗑️ جاري الحذف: [▱▱▱▱▱▱▱▱▱▱] 0%","🗑️ جاري الحذف: [▰▰▰▱▱▱▱▱▱▱] 30%","🗑️ جاري الحذف: [▰▰▰▰▰▰▱▱▱▱] 60%","✅ تم الحذف: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def restarting():
+        return ["🔄 جاري إعادة التشغيل: [▱▱▱▱▱▱▱▱▱▱] 0%","🔄 جاري إعادة التشغيل: [▰▱▱▱▱▱▱▱▱▱] 20%","🔄 جاري إعادة التشغيل: [▰▰▰▱▱▱▱▱▱▱] 40%","🔄 جاري إعادة التشغيل: [▰▰▰▰▰▰▱▱▱▱] 60%","🔄 جاري إعادة التشغيل: [▰▰▰▰▰▰▰▰▱▱] 80%","✅ تم إعادة التشغيل: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def recovering():
+        return ["🔄 جاري الاسترداد: [▱▱▱▱▱▱▱▱▱▱] 0%","🔄 جاري الاسترداد: [▰▰▱▱▱▱▱▱▱▱] 30%","🔄 جاري الاسترداد: [▰▰▰▰▰▰▱▱▱▱] 60%","✅ تم الاسترداد: [▰▰▰▰▰▰▰▰▰▰] 100%"]
+    @staticmethod
+    def logs_on():
+        return ["📺 السجلات الحية: [▱▱▱▱▱▱▱▱▱▱] معطلة","📺 السجلات الحية: [▰▰▰▱▱▱▱▱▱▱] جاري التشغيل...","📺 السجلات الحية: [▰▰▰▰▰▰▱▱▱▱] جاري الاتصال...","✅ السجلات الحية: [▰▰▰▰▰▰▰▰▰▰] مفعلة"]
+    @staticmethod
+    def logs_off():
+        return ["📺 السجلات الحية: [▰▰▰▰▰▰▰▰▰▰] مفعلة","📺 السجلات الحية: [▰▰▰▰▰▰▱▱▱▱] جاري الفصل...","📺 السجلات الحية: [▰▰▰▱▱▱▱▱▱▱] جاري الإغلاق...","❌ السجلات الحية: [▱▱▱▱▱▱▱▱▱▱] معطلة"]
+
+async def animate(chat_id, message_id, context, frames, delay=0.5, final_text=None):
+    msg = None
+    for i, frame in enumerate(frames):
+        await asyncio.sleep(delay)
+        try:
+            if i == 0:
+                if message_id:
+                    msg = await context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=frame)
+            else:
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=frame)
+        except Exception:
+            break
+    if final_text and msg:
+        await asyncio.sleep(0.3)
+        try:
+            await context.bot.edit_message_text(chat_id=chat_id, message_id=msg.message_id, text=final_text, parse_mode='Markdown')
+        except:
+            pass
+    return msg
+
+# --- [ꜰʟᴀꜱᴋ ᴡᴇʙ ꜱᴇʀᴠᴇʀ] ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return jsonify({"status": "online","service": "ᴀᴘᴏɴ ᴘʀᴇᴍɪᴜᴍ ʜᴏꜱᴛɪɴɗ ᴠ1","projects": len(project_owners),"running": len([p for p in running_processes.values() if p.poll() is None]),"recovery": recovery_enabled,"live_logs": live_logs_enabled})
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "healthy"}), 200
+
+def run_web():
+    try:
+        app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+    except Exception as e:
+        logger.error(f"❌ خطأ في تشغيل خادم Flask: {e}")
+
+# --- [ᴋᴇʏʙᴏᴀʀᴅ ꜱᴇᴛᴜᴘ] ---
+def get_main_keyboard(user_id):
+    if is_admin(user_id):
+        layout = [
+            [KeyboardButton("📦 رفع الملفات"), KeyboardButton("📁 إدارة الملفات")],
+            [KeyboardButton("🗑️ حذف المشاريع"), KeyboardButton("🏩 صحة النظام")],
+            [KeyboardButton("🌎 معلومات السيرفر"), KeyboardButton("📞 مراسلة المطور")],
+            [KeyboardButton("🔒 قفل النظام"), KeyboardButton("🔄 إعادة التشغيل التلقائي")],
+            [KeyboardButton("🛡️ الاسترداد التلقائي"), KeyboardButton("🎬 حالة المشاريع")],
+            [KeyboardButton("📺 السجلات الحية")]
+        ]
+    else:
+        layout = [
+            [KeyboardButton("📦 رفع الملفات"), KeyboardButton("📁 إدارة الملفات")],
+            [KeyboardButton("🗑️ حذف المشاريع"), KeyboardButton("🏩 صحة النظام")],
+            [KeyboardButton("🌎 معلومات السيرفر"), KeyboardButton("📞 مراسلة المطور")],
+            [KeyboardButton("📺 السجلات الحية")]
+        ]
+    return ReplyKeyboardMarkup(layout, resize_keyboard=True)
+
+# --- [ʟɪᴠᴇ ʟᴏɢꜱ ᴠɪᴇᴡᴇʀ ᴛᴀꜱᴋ] ---
+async def log_viewer_task(context: ContextTypes.DEFAULT_TYPE):
+    while True:
+        try:
+            if not live_logs_enabled:
+                await asyncio.sleep(2)
+                continue
+            current_time = time.time()
+            for user_id, session in list(user_log_sessions.items()):
+                if not session["active"]:
+                    continue
+                if current_time - session["last_update"] < 2:
+                    continue
+                logs = session["buffer"][-20:]
+                session["buffer"] = []
+                if not logs and not session.get("has_content"):
+                    continue
+                log_text = "\n".join(logs) if logs else "⏳ في انتظار السجلات..."
+                terminal_text = f"📺 **سجل مباشر - {session['project']}**\n━━━━━━━━━━━━━━━━━━━━━\n```\n{log_text[-3500:]}\n```\n━━━━━━━━━━━━━━━━━━━━━\n🟢 متصل | 🔄 تحديث تلقائي: 2ث"
+                try:
+                    await context.bot.edit_message_text(chat_id=session["chat_id"], message_id=session["message_id"], text=terminal_text, parse_mode='Markdown')
+                    session["last_update"] = current_time
+                    session["has_content"] = True
+                except Exception as e:
+                    if "message is not modified" not in str(e).lower():
+                        if "message to edit not found" in str(e).lower():
+                            session["active"] = False
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Log viewer error: {e}")
+            await asyncio.sleep(2)
+
+# --- [ꜱʏꜱᴛᴇᴍ ʜᴇᴀʟᴛʜ] ---
+async def get_system_health():
+    try:
+        if PSUTIL_AVAILABLE:
+            cpu_percent = psutil.cpu_percent(interval=1)
+            cpu_count = psutil.cpu_count()
+            ram = psutil.virtual_memory()
+            ram_used_gb = ram.used / (1024**3)
+            ram_total_gb = ram.total / (1024**3)
+            ram_percent = ram.percent
+            disk = psutil.disk_usage('/')
+            disk_used_gb = disk.used / (1024**3)
+            disk_total_gb = disk.total / (1024**3)
+            disk_percent = disk.percent
+            uptime = time.time() - psutil.boot_time()
+            return {"status": "ok","cpu": f"{cpu_percent}%","cpu_cores": cpu_count,"ram": f"{ram_percent}%","ram_used": f"{ram_used_gb:.1f}GB","ram_total": f"{ram_total_gb:.1f}GB","disk": f"{disk_percent}%","disk_used": f"{disk_used_gb:.1f}GB","disk_total": f"{disk_total_gb:.1f}GB","uptime": f"{int(uptime//3600)}h {int((uptime%3600)//60)}m"}
+        else:
+            return {"status": "basic","platform": platform.system(),"machine": platform.machine(),"processor": platform.processor() or "Unknown","python_version": platform.python_version()}
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+# --- [ᴄᴏʀᴇ ᴄᴏᴍᴍᴀɴᴅꜱ] ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if bot_locked and not is_admin(user_id):
+        await update.message.reply_text("🔒 **البوت مقفل حالياً**", parse_mode='Markdown')
+        return
+
+    welcome_text = (
+        "---\n"
+        "/start\n"
+        "مرحباً بك في بوت المطور محمد المصري النسخة المدفوعة 💎\n"
+        "البوت يرحب بالزوار 🔥\n"
+        "---"
+    )
+    await update.message.reply_text(welcome_text, reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+    global bot_locked, auto_restart_mode, recovery_enabled, live_logs_enabled
+
+    if bot_locked and not is_admin(user_id):
+        await update.message.reply_text("🔒 **البوت مقفل حالياً**", parse_mode='Markdown')
+        return
+
+    if user_id in user_upload_state and "path" in user_upload_state[user_id]:
+        p_name = text.replace(" ", "_").replace("/", "_")
+        state = user_upload_state[user_id]
+        extract_path = os.path.join(BASE_DIR, p_name)
+        try:
+            msg = await update.message.reply_text(Loading.executing()[0])
+            for frame in Loading.executing()[1:]:
+                await asyncio.sleep(0.4)
+                await msg.edit_text(frame)
+
+            os.makedirs(extract_path, exist_ok=True)
+            with zipfile.ZipFile(state["path"], 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            main_py = os.path.join(extract_path, "main.py")
+            req_txt = os.path.join(extract_path, "requirements.txt")
+            if not os.path.exists(main_py):
+                await msg.edit_text("❌ **خطأ: main.py غير موجود في الملف المضغوط!**", parse_mode='Markdown')
+                shutil.rmtree(extract_path)
+                return
+            if os.path.exists(req_txt):
+                for frame in Loading.installing():
+                    await msg.edit_text(frame)
+                    await asyncio.sleep(1.0)
+                try:
+                    subprocess.run([sys.executable, "-m", "pip", "install", "-r", req_txt], check=True, capture_output=True, text=True, cwd=extract_path)
+                except subprocess.CalledProcessError:
+                    pass
+
+            await msg.edit_text("📤 **جاري رفع المشروع إلى المستودع الرئيسي...**", parse_mode='Markdown')
+            push_ok, push_msg = push_to_github(extract_path, p_name)
+            if push_ok:
+                github_link = push_msg
+            else:
+                github_link = None
+
+            project_owners[p_name] = {"u_id": user_id,"u_name": state["u_name"],"u_username": update.effective_user.username or "ɴᴏ_ᴜꜱᴇʀɴᴀᴍᴇ","zip": state["path"],"original_name": state["original_name"],"path": extract_path, "github_url": github_link}
+            del user_upload_state[user_id]
+            final_text = f"✅ **تم حفظ المشروع `{p_name}` بنجاح!**\n━━━━━━━━━━━━━━━━━━━━━\n🚀 **يمكنك الآن إدارته عبر زر '📁 إدارة الملفات'**\n"
+            if github_link:
+                final_text += f"🌐 **GitHub:** {github_link}"
+            await msg.edit_text(final_text, parse_mode='Markdown')
+        except Exception as e:
+            await update.message.reply_text(f"❌ **خطأ:** `{str(e)}`", parse_mode='Markdown')
+        return
+
+    if text == "📦 رفع الملفات":
+        await update.message.reply_text(
+            "📦 **أرسل ملف ZIP يحتوي على:**\n"
+            "• `main.py` (كود البوت الخاص بك)\n"
+            "• `requirements.txt` (المكتبات المطلوبة)\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "✅ **الملف يجب أن يكون بصيغة .zip فقط**",
+            parse_mode='Markdown'
+        )
+
+    elif text == "📁 إدارة الملفات":
+        user_projects = [p for p, d in project_owners.items() if d["u_id"] == user_id]
+        if not user_projects:
+            await update.message.reply_text("📁 **لا توجد مشاريع بعد.**", parse_mode='Markdown')
+            return
+        keyboard = []
+        for p in user_projects:
+            status = "💚 متصل" if (p in running_processes and running_processes[p].poll() is None) else "💔 غير متصل"
+            keyboard.append([InlineKeyboardButton(f"{status} | {p}", callback_data=f"manage_{p}")])
+        await update.message.reply_text("📁 **مشاريعي**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    elif text == "🗑️ حذف المشاريع":
+        user_projects = [p for p, d in project_owners.items() if d["u_id"] == user_id]
+        if not user_projects:
+            await update.message.reply_text("🗑️ **لا توجد مشاريع للحذف.**", parse_mode='Markdown')
+            return
+        keyboard = [[InlineKeyboardButton(f"🗑️ {p}", callback_data=f"del_{p}")] for p in user_projects]
+        await update.message.reply_text("🗑️ **اختر المشروع لحذفه:**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+    elif text == "🏩 صحة النظام":
+        health_data = await get_system_health()
+        if health_data["status"] == "ok":
+            msg_text = (
+                "🏩 **صحة النظام**\n━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🖥️ **المعالج:** {health_data['cpu']} ({health_data['cpu_cores']} نوى)\n"
+                f"🧠 **الذاكرة:** {health_data['ram']} ({health_data['ram_used']}/{health_data['ram_total']})\n"
+                f"💾 **التخزين:** {health_data['disk']} ({health_data['disk_used']}/{health_data['disk_total']})\n"
+                f"⏱️ **مدة التشغيل:** {health_data['uptime']}\n"
+                f"📦 **المشاريع:** {len(project_owners)}\n"
+                f"💚 **قيد التشغيل:** {len([p for p in running_processes.values() if p.poll() is None])}\n"
+                f"🛡️ **الاسترداد:** {'مفعل' if recovery_enabled else 'معطل'}\n"
+                f"📺 **السجلات الحية:** {'مفعلة' if live_logs_enabled else 'معطلة'}"
+            )
+        else:
+            msg_text = f"⚠️ تعذر جلب البيانات: {health_data.get('error', 'خطأ')}"
+        await update.message.reply_text(msg_text, parse_mode='Markdown')
+
+    elif text == "🌎 معلومات السيرفر":
+        await update.message.reply_text(
+            f"🌎 **معلومات السيرفر**\n🚀 **المنفذ:** {PORT}\n🛡️ **المنصة:** {os.environ.get('PLATFORM', 'غير معروف')}\n🔄 **إعادة التشغيل التلقائي:** {'مفعل' if auto_restart_mode else 'معطل'}\n🛡️ **الاسترداد التلقائي:** {'مفعل' if recovery_enabled else 'معطل'}\n📺 **السجلات الحية:** {'مفعلة' if live_logs_enabled else 'معطلة'}",
+            parse_mode='Markdown'
+        )
+
+    elif text == "📞 مراسلة المطور":
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📞 تواصل مع المطور", url=f"tg://user?id={PRIMARY_ADMIN_ID}")]])
+        await update.message.reply_text(
+            f"👨‍💻 **لمراسلة المطور:**\n{ADMIN_DISPLAY_NAME}\n\n🔘 اضغط الزر أدناه للتواصل المباشر.",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+
+    elif is_admin(user_id):
+        if text == "🔒 قفل النظام":
+            bot_locked = True
+            await animate(update.message.chat_id, None, context, Loading.executing(), delay=0.3, final_text="🔒 **تم قفل البوت.**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        elif text == "🔓 فتح النظام":
+            bot_locked = False
+            await animate(update.message.chat_id, None, context, Loading.executing(), delay=0.3, final_text="🔓 **تم فتح البوت.**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        elif text == "🔄 إعادة التشغيل التلقائي":
+            auto_restart_mode = not auto_restart_mode
+            status = "مفعل" if auto_restart_mode else "معطل"
+            await animate(update.message.chat_id, None, context, Loading.restarting(), delay=0.5, final_text=f"🔄 **إعادة التشغيل التلقائي: {status}**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        elif text == "🛡️ الاسترداد التلقائي":
+            recovery_enabled = not recovery_enabled
+            status = "مفعل" if recovery_enabled else "معطل"
+            await animate(update.message.chat_id, None, context, Loading.recovering(), delay=0.5, final_text=f"🛡️ **الاسترداد التلقائي: {status}**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        elif text == "🎬 حالة المشاريع":
+            total = len(project_owners)
+            running = len([p for p in running_processes.values() if p.poll() is None])
+            offline = total - running
+            await update.message.reply_text(
+                f"🎬 **حالة المشاريع**\n━━━━━━━━━━━━━━━━━━━━━\n📦 **الإجمالي:** {total}\n💚 **متصل:** {running}\n💔 **غير متصل:** {offline}\n📺 **السجلات الحية:** {'مفعلة' if live_logs_enabled else 'معطلة'}",
+                parse_mode='Markdown'
+            )
+        elif text == "📺 السجلات الحية":
+            live_logs_enabled = not live_logs_enabled
+            if live_logs_enabled:
+                await animate(update.message.chat_id, None, context, Loading.logs_on(), delay=0.5, final_text="📺 **السجلات الحية: مفعلة**")
+            else:
+                for uid in list(user_log_sessions.keys()):
+                    log_streamer.unsubscribe(uid)
+                await animate(update.message.chat_id, None, context, Loading.logs_off(), delay=0.5, final_text="📺 **السجلات الحية: معطلة**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("⚠️ **استخدم الأزرار المتاحة فقط.**", parse_mode='Markdown')
+    else:
+        if text == "📺 السجلات الحية":
+            live_logs_enabled = not live_logs_enabled
+            if live_logs_enabled:
+                await animate(update.message.chat_id, None, context, Loading.logs_on(), delay=0.5, final_text="📺 **السجلات الحية: مفعلة**")
+            else:
+                for uid in list(user_log_sessions.keys()):
+                    log_streamer.unsubscribe(uid)
+                await animate(update.message.chat_id, None, context, Loading.logs_off(), delay=0.5, final_text="📺 **السجلات الحية: معطلة**")
+            await update.message.reply_text("تم تحديث القائمة", reply_markup=get_main_keyboard(user_id), parse_mode='Markdown')
+        else:
+            await update.message.reply_text("⚠️ **استخدم الأزرار المتاحة فقط.**", parse_mode='Markdown')
+
+async def handle_docs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if bot_locked and not is_admin(user_id):
+        await update.message.reply_text("🔒 **البوت مقفل حالياً**", parse_mode='Markdown')
+        return
+    doc = update.message.document
+    if not doc.file_name.endswith('.zip'):
+        await update.message.reply_text("❌ **يرجى إرسال ملف بصيغة .zip فقط!**", parse_mode='Markdown')
+        return
+    msg = await update.message.reply_text(Loading.uploading()[0])
+    for frame in Loading.uploading()[1:]:
+        await asyncio.sleep(0.8)
+        await msg.edit_text(frame)
+    temp_zip = os.path.join(TEMP_DIR, f"{user_id}_{int(time.time())}_{doc.file_name}")
+    try:
+        file = await doc.get_file()
+        await file.download_to_drive(temp_zip)
+        user_upload_state[user_id] = {"path": temp_zip,"u_name": update.effective_user.full_name,"original_name": doc.file_name}
+        await msg.edit_text("🖋️ **أرسل اسماً لمشروعك (يمكنك استخدام مسافات):**", parse_mode='Markdown')
+    except Exception as e:
+        await msg.edit_text("❌ **فشل تحميل الملف!**", parse_mode='Markdown')
+
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data.split('_')
+    action, p_name = data[0], "_".join(data[1:])
+    user_id = update.effective_user.id
+
+    if action == "run":
+        if p_name in running_processes and running_processes[p_name].poll() is None:
+            await query.edit_message_text(f"⚠️ **`{p_name}` يعمل بالفعل!**", parse_mode='Markdown')
+            return
+        folder = project_owners.get(p_name, {}).get("path")
+        if not folder:
+            await query.edit_message_text(f"❌ **المشروع `{p_name}` غير موجود**", parse_mode='Markdown')
+            return
+        main_file = os.path.join(folder, "main.py")
+        if os.path.exists(main_file):
+            msg = await query.edit_message_text(Loading.executing()[0])
+            for frame in Loading.executing()[1:]:
+                await asyncio.sleep(0.4)
+                await msg.edit_text(frame)
+            try:
+                proc = subprocess.Popen([sys.executable, "-u", main_file], cwd=folder, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+                running_processes[p_name] = proc
+                if live_logs_enabled:
+                    log_streamer.start_stream(p_name, proc)
+                keyboard = [[InlineKeyboardButton("▶️ تشغيل", callback_data=f"run_{p_name}"), InlineKeyboardButton("🛑 إيقاف", callback_data=f"stop_{p_name}")],[InlineKeyboardButton("📺 سجلات حية", callback_data=f"viewlogs_{p_name}")],[InlineKeyboardButton("🗑️ حذف", callback_data=f"del_{p_name}")]]
+                await msg.edit_text(f"🚀 **`{p_name}` أصبح متصلاً الآن! 💚**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+            except Exception as e:
+                await msg.edit_text(f"❌ **فشل التشغيل:** `{str(e)}`", parse_mode='Markdown')
+    elif action == "stop":
+        if p_name in running_processes:
+            msg = await query.edit_message_text("🛑 جاري الإيقاف...")
+            log_streamer.stop_stream(p_name)
+            try:
+                running_processes[p_name].terminate()
+                running_processes[p_name].wait(timeout=5)
+            except:
+                running_processes[p_name].kill()
+            del running_processes[p_name]
+            await msg.edit_text(f"🛑 **`{p_name}` غير متصل الآن! 💔**", parse_mode='Markdown')
+    elif action == "viewlogs":
+        if not live_logs_enabled:
+            await query.answer("❌ السجلات الحية معطلة حالياً!", show_alert=True)
+            return
+        log_msg = await context.bot.send_message(chat_id=update.effective_chat.id, text="📺 **جاري تهيئة وحدة السجلات...**", parse_mode='Markdown')
+        log_streamer.subscribe(p_name, user_id, update.effective_chat.id, log_msg.message_id)
+    elif action == "del":
+        msg = await query.edit_message_text(Loading.deleting()[0])
+        for frame in Loading.deleting()[1:]:
+            await asyncio.sleep(0.5)
+            await msg.edit_text(frame)
+        if p_name in running_processes:
+            log_streamer.stop_stream(p_name)
+            try:
+                running_processes[p_name].terminate()
+            except:
+                pass
+            del running_processes[p_name]
+        path = os.path.join(BASE_DIR, p_name)
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        if p_name in project_owners:
+            del project_owners[p_name]
+        await msg.edit_text(f"🗑️ **تم حذف `{p_name}`!**", parse_mode='Markdown')
+    elif action == "manage":
+        status = "💚 متصل" if (p_name in running_processes and running_processes[p_name].poll() is None) else "💔 غير متصل"
+        keyboard = [[InlineKeyboardButton("▶️ تشغيل", callback_data=f"run_{p_name}"), InlineKeyboardButton("🛑 إيقاف", callback_data=f"stop_{p_name}")],[InlineKeyboardButton("📺 سجلات حية", callback_data=f"viewlogs_{p_name}")],[InlineKeyboardButton("🗑️ حذف", callback_data=f"del_{p_name}")]]
+        await query.edit_message_text(f"📦 **المشروع:** `{p_name}`\n📡 **الحالة:** {status}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+
+# --- [أوامر الأدمن المساعدة] ---
+async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    h = await get_system_health()
+    await update.message.reply_text(f"🏩 النظام يعمل بكفاءة:\n{h}")
+
+async def server_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id): return
+    await update.message.reply_text(f"🌎 معلومات السيرفر: المنفذ {PORT}")
+
+async def projects_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"📦 عدد المشاريع: {len(project_owners)}")
+
+async def lock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global bot_locked
+    if is_admin(update.effective_user.id): bot_locked = True; await update.message.reply_text("🔒 قفل النظام")
+
+async def unlock_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global bot_locked
+    if is_admin(update.effective_user.id): bot_locked = False; await update.message.reply_text("🔓 فتح النظام")
+
+async def autorestart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global auto_restart_mode
+    if is_admin(update.effective_user.id): auto_restart_mode = not auto_restart_mode; await update.message.reply_text(f"🔄 إعادة التشغيل: {auto_restart_mode}")
+
+async def recovery_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global recovery_enabled
+    if is_admin(update.effective_user.id): recovery_enabled = not recovery_enabled; await update.message.reply_text(f"🛡️ الاسترداد: {recovery_enabled}")
+
+async def logs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global live_logs_enabled
+    if is_admin(update.effective_user.id): live_logs_enabled = not live_logs_enabled; await update.message.reply_text(f"📺 السجلات: {live_logs_enabled}")
+
+# --- [ᴍᴀɪɴ] ---
+def main():
+    # تشغيل خادم الويب Flask في الخلفية
+    web_thread = Thread(target=run_web, daemon=True)
+    web_thread.start()
+
+    application = Application.builder().token(TOKEN).build()
+    
+    # المعالجات والأوامر
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("health", health_cmd))
+    application.add_handler(CommandHandler("server", server_cmd))
+    application.add_handler(CommandHandler("projects", projects_cmd))
+    application.add_handler(CommandHandler("lock", lock_cmd))
+    application.add_handler(CommandHandler("unlock", unlock_cmd))
+    application.add_handler(CommandHandler("autorestart", autorestart_cmd))
+    application.add_handler(CommandHandler("recovery", recovery_cmd))
+    application.add_handler(CommandHandler("logs", logs_cmd))
+    application.add_handler(MessageHandler(filters.Document.ZIP, handle_docs))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(CallbackQueryHandler(button_callback))
+
+    async def post_init(app):
+        await app.bot.set_my_commands([BotCommand("start", "🚀 تشغيل البوت والقائمة الرئيسية")])
+        await sync_projects_from_github()
+        asyncio.create_task(log_viewer_task(app))
+
+    application.post_init = post_init
+    
+    # تشغيل البوت بوضع البولينج المستمر (يجبره على عدم الانغلاق أبداً)
+    application.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
+
